@@ -77,7 +77,7 @@ def draw_bubble_heatmap(ax, assessed, cfg, mode, period):
     ax.set_yticks(range(1, 6))
     ax.set_xticklabels([f"{i}\n{IMP_LABELS[i]}" for i in range(1, 6)], fontsize=9)
     ax.set_yticklabels([f"{i} {LIK_LABELS[i]}" for i in range(1, 6)], fontsize=9)
-    ax.set_xlabel("综合影响（五维加权）", fontsize=11)
+    ax.set_xlabel("综合影响（八维加权）", fontsize=11)
     ax.set_ylabel("发生可能性", fontsize=11)
     tag = "固有" if mode == "inherent" else "剩余"
     ax.set_title(f"{tag}风险评估热力图 · {period}（n={len(assessed)}）",
@@ -236,7 +236,8 @@ def sensitivity_analysis(ax, cfg, risks, controls, base_rank, top_ids):
         s.set_visible(False)
     stable = sum(1 for o in overlaps if o == 5)
     worst = min(overlaps)
-    ax.set_title(f"权重敏感性分析：各维度权重 ±20% 下的剩余风险排名（TOP5 稳定 {stable}/10，"
+    n_scen = len(overlaps)
+    ax.set_title(f"权重敏感性分析：各维度权重 ±20% 下的剩余风险排名（TOP5 稳定 {stable}/{n_scen}，"
                  f"最差场景重合 {worst}/5）", fontsize=12.5, weight="bold", pad=12)
     return stable, worst, overlaps
 
@@ -370,14 +371,14 @@ def main():
         ranked = sorted(assessed, key=lambda x: -x["residual"])
         base_rank = {a["risk_id"]: i + 1 for i, a in enumerate(ranked)}
         top_ids = [a["risk_id"] for a in ranked[:8]]
-        fig, ax = plt.subplots(figsize=(11, 6))
+        fig, ax = plt.subplots(figsize=(11, 8.5))
         stable, worst, overlaps = sensitivity_analysis(ax, cfg, risks_b, controls_b,
                                                        base_rank, top_ids)
         fig.tight_layout()
         f6 = f"sensitivity_{base_p}.png"
         fig.savefig(os.path.join(args.outdir, f6), dpi=150, bbox_inches="tight")
         print(f"\n[权重敏感性分析] 各维度 ±20% 扰动（逐行归一化），TOP5 与基准重合度："
-              f"{overlaps} → 完全稳定 {stable}/10，最差 {worst}/5")
+              f"{overlaps} → 完全稳定 {stable}/{len(overlaps)}，最差 {worst}/5")
 
     pdf_path = os.path.join(args.outdir, f"executive_report_{base_p}.pdf")
     with PdfPages(pdf_path) as pdf:

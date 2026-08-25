@@ -29,18 +29,20 @@ def read_config(ws):
         "imp_operation": float(ws["B5"].value),
         "imp_reputation": float(ws["B6"].value),
         "imp_fraud": float(ws["B7"].value),
+        "imp_strategy": float(ws["B8"].value),
+        "imp_data": float(ws["B9"].value),
+        "imp_hse": float(ws["B10"].value),
     }
     reduction_map = {}
     for row in range(4, 9):
         score = ws[f"D{row}"].value
         if score is not None:
             reduction_map[str(int(score))] = round(float(ws[f"E{row}"].value), 4)
-    thresholds = {"extreme": int(ws["B12"].value), "high": int(ws["B13"].value),
-                  "medium": int(ws["B14"].value), "low": int(ws["B15"].value)}
+    thresholds = {"extreme": int(ws["B14"].value), "high": int(ws["B15"].value),
+                  "medium": int(ws["B16"].value), "low": int(ws["B17"].value)}
     ref_reduction = float(ws["E10"].value or 0.4)
     impact_floor = float(ws["E13"].value or 0.75)
-    dim_keys = ["imp_financial", "imp_compliance", "imp_operation",
-                "imp_reputation", "imp_fraud"]
+    dim_keys = list(DIMS)
     domain_weights = {}
     for row in range(27, 39):
         dom = ws[f"A{row}"].value
@@ -84,16 +86,23 @@ def main():
             sys.exit(f"[错误] 权重行[{name}]之和为 {wsum}，必须等于 1。请先修正「参数配置」页。")
 
     risks, controls = [], []
-    for vals in read_rows(wb["风险登记册"], max_col=23):
+    for vals in read_rows(wb["风险登记册"], max_col=26):
         rid, name, dom, desc, dept, period, lik = vals[:7]
-        dims = [int(v) for v in vals[7:12]]
-        for label, v in zip(["可能性"] + [f"影响-{d}" for d in DIMS], [lik] + dims):
+        dims = [None if v is None or str(v).strip() == "" else int(v)
+                for v in vals[7:15]]
+        scored = [d for d in dims if d is not None]
+        if not scored:
+            sys.exit(f"[错误] 风险 {rid} 至少需要为一个影响维度打分（其余可留空=不适用）。")
+        for label, v in zip(["可能性"] + [f"影响-{d}" for d in DIMS],
+                            [lik] + dims):
+            if v is None and label != "可能性":
+                continue
             if not (isinstance(v, int) and 1 <= v <= 5):
                 sys.exit(f"[错误] 风险 {rid} 的打分 {label}={v} 超出 1~5。")
         risks.append({"risk_id": str(rid).strip(), "name": name, "domain": dom,
                       "description": desc or "", "owner_dept": dept or "",
                       "period": period, "likelihood": int(lik),
-                      "rationale": vals[22] or "",
+                      "rationale": vals[25] or "",
                       **dict(zip(DIMS, dims))})
     for vals in read_rows(wb["控制措施表"], max_col=6):
         cid, rid, period, desc, score, key = vals

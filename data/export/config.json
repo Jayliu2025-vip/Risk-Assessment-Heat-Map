@@ -1,96 +1,135 @@
 {
   "version": "1.1",
   "weights": {
-    "imp_financial": 0.3,
-    "imp_compliance": 0.25,
-    "imp_operation": 0.15,
-    "imp_reputation": 0.15,
-    "imp_fraud": 0.15
+    "imp_financial": 0.25,
+    "imp_compliance": 0.2,
+    "imp_operation": 0.12,
+    "imp_reputation": 0.1,
+    "imp_fraud": 0.1,
+    "imp_strategy": 0.1,
+    "imp_data": 0.08,
+    "imp_hse": 0.05
   },
   "domain_weights": {
     "战略与投资": {
-      "imp_financial": 0.3,
-      "imp_compliance": 0.15,
-      "imp_operation": 0.25,
-      "imp_reputation": 0.25,
-      "imp_fraud": 0.05
-    },
-    "治理与决策": {
-      "imp_financial": 0.25,
-      "imp_compliance": 0.25,
-      "imp_operation": 0.15,
-      "imp_reputation": 0.25,
-      "imp_fraud": 0.1
-    },
-    "资金活动": {
-      "imp_financial": 0.4,
-      "imp_compliance": 0.25,
-      "imp_operation": 0.1,
-      "imp_reputation": 0.15,
-      "imp_fraud": 0.1
-    },
-    "财务报告与税务": {
-      "imp_financial": 0.35,
-      "imp_compliance": 0.3,
-      "imp_operation": 0.1,
-      "imp_reputation": 0.2,
-      "imp_fraud": 0.05
-    },
-    "资产管理": {
-      "imp_financial": 0.4,
+      "imp_financial": 0.2,
       "imp_compliance": 0.1,
       "imp_operation": 0.2,
-      "imp_reputation": 0.15,
-      "imp_fraud": 0.15
+      "imp_reputation": 0.2,
+      "imp_fraud": 0.05,
+      "imp_strategy": 0.2,
+      "imp_data": 0.03,
+      "imp_hse": 0.02
+    },
+    "治理与决策": {
+      "imp_financial": 0.18,
+      "imp_compliance": 0.2,
+      "imp_operation": 0.12,
+      "imp_reputation": 0.2,
+      "imp_fraud": 0.08,
+      "imp_strategy": 0.18,
+      "imp_data": 0.03,
+      "imp_hse": 0.01
+    },
+    "资金活动": {
+      "imp_financial": 0.32,
+      "imp_compliance": 0.2,
+      "imp_operation": 0.08,
+      "imp_reputation": 0.12,
+      "imp_fraud": 0.08,
+      "imp_strategy": 0.1,
+      "imp_data": 0.06,
+      "imp_hse": 0.04
+    },
+    "财务报告与税务": {
+      "imp_financial": 0.28,
+      "imp_compliance": 0.25,
+      "imp_operation": 0.08,
+      "imp_reputation": 0.16,
+      "imp_fraud": 0.04,
+      "imp_strategy": 0.1,
+      "imp_data": 0.06,
+      "imp_hse": 0.03
+    },
+    "资产管理": {
+      "imp_financial": 0.32,
+      "imp_compliance": 0.08,
+      "imp_operation": 0.16,
+      "imp_reputation": 0.12,
+      "imp_fraud": 0.12,
+      "imp_strategy": 0.08,
+      "imp_data": 0.04,
+      "imp_hse": 0.08
     },
     "采购与外包": {
-      "imp_financial": 0.25,
-      "imp_compliance": 0.25,
-      "imp_operation": 0.1,
-      "imp_reputation": 0.15,
-      "imp_fraud": 0.25
-    },
-    "合同管理": {
-      "imp_financial": 0.25,
-      "imp_compliance": 0.3,
-      "imp_operation": 0.15,
-      "imp_reputation": 0.2,
-      "imp_fraud": 0.1
-    },
-    "工程项目": {
-      "imp_financial": 0.35,
-      "imp_compliance": 0.15,
-      "imp_operation": 0.2,
-      "imp_reputation": 0.2,
-      "imp_fraud": 0.1
-    },
-    "人力资源": {
       "imp_financial": 0.2,
       "imp_compliance": 0.2,
-      "imp_operation": 0.25,
-      "imp_reputation": 0.2,
-      "imp_fraud": 0.15
+      "imp_operation": 0.08,
+      "imp_reputation": 0.12,
+      "imp_fraud": 0.2,
+      "imp_strategy": 0.08,
+      "imp_data": 0.05,
+      "imp_hse": 0.07
+    },
+    "合同管理": {
+      "imp_financial": 0.2,
+      "imp_compliance": 0.25,
+      "imp_operation": 0.12,
+      "imp_reputation": 0.16,
+      "imp_fraud": 0.08,
+      "imp_strategy": 0.12,
+      "imp_data": 0.04,
+      "imp_hse": 0.03
+    },
+    "工程项目": {
+      "imp_financial": 0.28,
+      "imp_compliance": 0.12,
+      "imp_operation": 0.16,
+      "imp_reputation": 0.16,
+      "imp_fraud": 0.08,
+      "imp_strategy": 0.1,
+      "imp_data": 0.02,
+      "imp_hse": 0.08
+    },
+    "人力资源": {
+      "imp_financial": 0.15,
+      "imp_compliance": 0.16,
+      "imp_operation": 0.2,
+      "imp_reputation": 0.16,
+      "imp_fraud": 0.12,
+      "imp_strategy": 0.12,
+      "imp_data": 0.04,
+      "imp_hse": 0.05
     },
     "信息系统": {
-      "imp_financial": 0.15,
-      "imp_compliance": 0.15,
-      "imp_operation": 0.35,
-      "imp_reputation": 0.2,
-      "imp_fraud": 0.15
+      "imp_financial": 0.1,
+      "imp_compliance": 0.12,
+      "imp_operation": 0.28,
+      "imp_reputation": 0.16,
+      "imp_fraud": 0.12,
+      "imp_strategy": 0.08,
+      "imp_data": 0.12,
+      "imp_hse": 0.02
     },
     "合规与法律": {
-      "imp_financial": 0.15,
-      "imp_compliance": 0.45,
-      "imp_operation": 0.1,
-      "imp_reputation": 0.25,
-      "imp_fraud": 0.05
+      "imp_financial": 0.1,
+      "imp_compliance": 0.38,
+      "imp_operation": 0.08,
+      "imp_reputation": 0.2,
+      "imp_fraud": 0.04,
+      "imp_strategy": 0.08,
+      "imp_data": 0.1,
+      "imp_hse": 0.02
     },
     "安全环保": {
-      "imp_financial": 0.15,
-      "imp_compliance": 0.3,
-      "imp_operation": 0.3,
-      "imp_reputation": 0.25,
-      "imp_fraud": 0.0
+      "imp_financial": 0.1,
+      "imp_compliance": 0.22,
+      "imp_operation": 0.22,
+      "imp_reputation": 0.18,
+      "imp_fraud": 0.0,
+      "imp_strategy": 0.06,
+      "imp_data": 0.02,
+      "imp_hse": 0.2
     }
   },
   "impact_floor_factor": 0.75,
