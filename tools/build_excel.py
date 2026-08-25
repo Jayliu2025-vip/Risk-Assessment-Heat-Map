@@ -292,7 +292,8 @@ def build_register_sheet(wb, risks):
                "声誉舆情\n(1-5)", "舞弊风险\n(1-5)", "战略影响\n(1-5)", "数据安全\n(1-5)",
                "健康安全\n(1-5)",
                "综合影响", "固有风险", "关键控制分", "折减系数", "剩余风险", "剩余等级",
-               "影响档\n(辅助)", "固有点\n(辅助)", "建议审计频次", "控制挽回率", "打分依据"]
+               "影响档\n(辅助)", "固有点\n(辅助)", "建议审计频次", "控制挽回率", "打分依据",
+               "优先级排序键\n(辅助)", "选定期间排序键\n(辅助)"]
     ws["A1"] = "风险登记册（黄色列录入，灰色列自动计算，请勿改写公式；影响维度可留空=不适用）"
     ws["A1"].font = F_TITLE
     for i, h in enumerate(headers, start=1):
@@ -342,6 +343,11 @@ def build_register_sheet(wb, risks):
             23: f'=IF($A{row}="","",IF(Q{row}="","",ROUND(Q{row},0)))',
             24: f'=IF($A{row}="","",IF(U{row}="","",IF(U{row}="极高","每年必审",IF(U{row}="高","每年审计",IF(U{row}="中","两年一轮","按需抽查")))))',
             25: f'=IF($A{row}="","",IF(OR(Q{row}="",Q{row}=0),"",(Q{row}-T{row})/Q{row}))',
+            27: (f'=IF($A{row}="","",IF(T{row}="","",'
+                 f'T{row}+({REG_MAX + 1}-ROW())/1000000))'),
+            28: (f'=IF($A{row}="",NA(),IF(OR('
+                 f'\'汇总与优先级\'!$B$2="全部",$F{row}=\'汇总与优先级\'!$B$2),'
+                 f'$AA{row},NA()))'),
         }
         for c, fml in formulas.items():
             cell = ws.cell(row=row, column=c, value=fml)
@@ -354,6 +360,8 @@ def build_register_sheet(wb, risks):
                 cell.number_format = "0%"
             if c == 25:
                 cell.number_format = "0%"
+            if c in (27, 28):
+                cell.number_format = "0.000000"
 
     dv_score = DataValidation(type="whole", operator="between", formula1="1",
                               formula2="5", allow_blank=True,
@@ -385,7 +393,10 @@ def build_register_sheet(wb, risks):
                     "G": 9, "H": 9, "I": 9, "J": 9, "K": 9, "L": 9,
                     "M": 9, "N": 9, "O": 9,
                     "P": 9, "Q": 9, "R": 9, "S": 9, "T": 9, "U": 9,
-                    "V": 8, "W": 8, "X": 11, "Y": 10, "Z": 40})
+                    "V": 8, "W": 8, "X": 11, "Y": 10, "Z": 40,
+                    "AA": 12, "AB": 12})
+    ws.column_dimensions["AA"].hidden = True
+    ws.column_dimensions["AB"].hidden = True
     ws.freeze_panes = "D4"
     return ws
 
@@ -443,7 +454,7 @@ def band_fill(l_val, i_val):
 def build_heatmap_sheet(wb):
     ws = wb.create_sheet("热力图")
     ws.sheet_properties.tabColor = "C00000"
-    ws["A1"] = "风险热力图（可能性 × 综合影响）"
+    ws["A1"] = "风险热力图（可能性 × 综合影响档）"
     ws["A1"].font = F_TITLE
     ws["B3"] = "评估期间筛选："
     ws["C3"] = P2
@@ -462,7 +473,7 @@ def build_heatmap_sheet(wb):
             c.fill = FILL_HEAD
             c.alignment = CENTER
             c.border = BORDER
-        ws.cell(row=head, column=2, value="可能性＼影响").font = F_HEAD
+        ws.cell(row=head, column=2, value="可能性＼影响档").font = F_HEAD
         ws.cell(row=head, column=2).fill = FILL_HEAD
         ws.cell(row=head, column=2).alignment = CENTER
         crit = f'IF($C$3="全部","<>",$C$3)'
@@ -504,7 +515,8 @@ def build_heatmap_sheet(wb):
         cell.font = Font(bold=True, color="FFFFFF")
         cell.alignment = CENTER
     ws.cell(row=25, column=2,
-            value="说明：固有矩阵定位＝(发生可能性, 综合影响取整)；剩余矩阵同一坐标展示控制后的平均剩余分。"
+            value="说明：固有矩阵定位＝(发生可能性, 综合影响档)；影响档由精确综合影响四舍五入得到。"
+                  "剩余矩阵同一坐标展示控制后的平均剩余分。"
                   "逐条风险的精确剩余分见「汇总与优先级」页。").font = F_NOTE
     set_widths(ws, {"A": 3, "B": 14, "C": 9, "D": 9, "E": 9, "F": 9, "G": 9})
     return ws
@@ -565,32 +577,35 @@ def build_summary_sheet(wb):
             value="二、年度审计优先级清单（按剩余风险降序排名；可用筛选按排名/领域过滤）")
     ws.cell(row=prio_title_row, column=1).font = F_SECTION
     pheads = ["排名", "风险编号", "风险名称", "所属领域", "责任部门", "可能性",
-              "固有风险", "关键控制分", "剩余风险", "剩余等级", "建议频次"]
+              "固有风险", "关键控制分", "剩余风险", "剩余等级", "建议频次",
+              "选源排序键\n(辅助)"]
     prio_head_row = prio_title_row + 1
     for i, h in enumerate(pheads, start=1):
         ws.cell(row=prio_head_row, column=i, value=h)
     style_header(ws, prio_head_row, range(1, len(pheads) + 1), height=24)
-    reg_cols = {2: "A", 3: "B", 4: "C", 5: "E", 6: "G", 7: "Q", 8: "R", 9: "T", 10: "U"}
+    reg_cols = {2: "A", 3: "B", 4: "C", 5: "E", 6: "G",
+                7: "Q", 8: "R", 9: "T", 10: "U"}
     for k in range(PRIO_ROWS):
         row = prio_head_row + 1 + k
-        rreg = 4 + k
+        selector = ws.cell(row=row, column=12,
+                           value=(f'=IFERROR(AGGREGATE(14,6,'
+                                  f'风险登记册!$AB$4:$AB${REG_MAX},'
+                                  f'ROWS($L${prio_head_row + 1}:L{row})),"")'))
+        selector.number_format = "0.000000"
         a = ws.cell(row=row, column=1,
-                    value=(f'=IF($B{row}="","",COUNTIFS(风险登记册!$F$4:$F${REG_MAX},{crit},'
-                           f'风险登记册!$T$4:$T${REG_MAX},">"&$I{row})+'
-                           f'COUNTIFS(风险登记册!$F$4:$F${REG_MAX},{crit},'
-                           f'风险登记册!$T$4:$T${REG_MAX},$I{row},'
-                           f'风险登记册!$A$4:$A${REG_MAX},"<"&$B{row})+1)'))
+                    value=f'=IF($L{row}="","",ROWS($A${prio_head_row + 1}:A{row}))')
         a.border = BORDER
         a.alignment = CENTER
         for pc, rc in reg_cols.items():
             cell = ws.cell(row=row, column=pc,
-                           value=f'=IF($B{row}="","",风险登记册!{rc}{rreg})')
+                           value=(f'=IF($L{row}="","",INDEX(风险登记册!${rc}$4:${rc}${REG_MAX},'
+                                  f'MATCH($L{row},风险登记册!$AA$4:$AA${REG_MAX},0)))'))
             cell.border = BORDER
             cell.alignment = LEFT if pc in (3, 4, 5) else CENTER
             if pc in (7, 9):
                 cell.number_format = "0.00"
         kcol = ws.cell(row=row, column=11,
-                       value=(f'=IF($B{row}="","",IF($J{row}="极高","每年必审",'
+                       value=(f'=IF($L{row}="","",IF($J{row}="极高","每年必审",'
                               f'IF($J{row}="高","每年审计",IF($J{row}="中","两年一轮","按需抽查"))))'))
         kcol.border = BORDER
         kcol.alignment = CENTER
@@ -603,7 +618,8 @@ def build_summary_sheet(wb):
                             font=Font(color="FFFFFF", bold=True), stopIfTrue=True))
 
     set_widths(ws, {"A": 7, "B": 10, "C": 22, "D": 13, "E": 12, "F": 8,
-                    "G": 9, "H": 10, "I": 9, "J": 9, "K": 10})
+                    "G": 9, "H": 10, "I": 9, "J": 9, "K": 10, "L": 12})
+    ws.column_dimensions["L"].hidden = True
     ws.freeze_panes = "A6"
     return ws
 

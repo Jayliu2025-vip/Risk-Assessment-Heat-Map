@@ -2,10 +2,12 @@
 """v1.2 发布物口径与网页默认配置一致性测试。"""
 
 import json
+import math
 import re
 import shutil
 import subprocess
 import unittest
+from collections import Counter
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -229,14 +231,159 @@ console.log(JSON.stringify(migrated));
 
     def test_workbook_priority_ranking_uses_residual_score(self):
         workbook = load_workbook(ROOT / "audit_risk_register.xlsx", data_only=False)
+        register = workbook["风险登记册"]
         summary = workbook["汇总与优先级"]
-        rank_formula = next(
-            cell.value
-            for cell in summary["A"]
-            if isinstance(cell.value, str) and "COUNTIFS" in cell.value
+        self.assertEqual(register["AA3"].value, "优先级排序键\n(辅助)")
+        self.assertTrue(register.column_dimensions["AA"].hidden)
+        key_formula = register["AA4"].value
+        self.assertIn("T4", key_formula)
+        self.assertIn("ROW()", key_formula)
+        self.assertEqual(register["AB3"].value, "选定期间排序键\n(辅助)")
+        self.assertTrue(register.column_dimensions["AB"].hidden)
+        period_key_formula = register["AB4"].value
+        self.assertIn("'汇总与优先级'!$B$2", period_key_formula)
+        self.assertIn("$F4", period_key_formula)
+        self.assertIn("$AA4", period_key_formula)
+        self.assertIn("NA()", period_key_formula)
+
+        selector_formula = summary["L21"].value
+        self.assertIn("AGGREGATE(14,6", selector_formula)
+        self.assertIn("风险登记册!$AB$4:$AB$203", selector_formula)
+        self.assertNotIn("风险登记册!$Q$4:$Q$203", selector_formula)
+
+    def test_workbook_priority_list_selects_period_top_rows_via_index_match(self):
+        workbook = load_workbook(ROOT / "audit_risk_register.xlsx", data_only=False)
+        summary = workbook["汇总与优先级"]
+        self.assertTrue(summary.column_dimensions["L"].hidden)
+        selector_formula = summary["L21"].value
+        self.assertNotIn("/((", selector_formula)
+        self.assertNotIn("风险登记册!$F$4:$F$203", selector_formula)
+        self.assertIn("ROWS($L$21:L21)", selector_formula)
+
+        self.assertEqual(
+            summary["A21"].value,
+            '=IF($L21="","",ROWS($A$21:A21))',
         )
-        self.assertIn("风险登记册!$T$4:$T$203", rank_formula)
-        self.assertNotIn("风险登记册!$Q$4:$Q$203", rank_formula)
+        for column in range(2, 11):
+            formula = summary.cell(row=21, column=column).value
+            with self.subTest(column=column):
+                self.assertIn("INDEX(", formula)
+                self.assertIn("MATCH($L21,风险登记册!$AA$4:$AA$203,0)", formula)
+                self.assertNotIn("风险登记册!A4", formula)
+        self.assertTrue(summary["K21"].value.startswith('=IF($L21="","",'))
+        self.assertNotIn("风险登记册!", summary["K21"].value)
+
+    def test_report_bubble_offsets_keep_eight_risks_unique_inside_cell(self):
+        from tools import generate_report
+
+        offset_factory = getattr(generate_report, "bubble_offsets", None)
+        self.assertTrue(
+            callable(offset_factory),
+            "报告生成器必须提供可测试的 bubble_offsets(count)",
+        )
+        offsets = offset_factory(8)
+        self.assertEqual(len(offsets), 8)
+        self.assertEqual(len(set(offsets)), 8)
+        self.assertTrue(all(abs(x) <= 0.5 and abs(y) <= 0.5 for x, y in offsets))
+        minimum_spacing = min(
+            math.hypot(ax - bx, ay - by)
+            for index, (ax, ay) in enumerate(offsets)
+            for bx, by in offsets[index + 1:]
+        )
+        self.assertGreaterEqual(minimum_spacing, 0.20)
+
+        cfg, risks, controls = common.load_dataset(ROOT / "data/export/2026H1")
+        assessed = common.assess_all(risks, controls, cfg)
+        cell_counts = Counter(
+            (risk["likelihood"], generate_report.impact_cell(risk["impact"]))
+            for risk in assessed
+        )
+        self.assertEqual(max(cell_counts.values()), 8)
+        for count in cell_counts.values():
+            positions = offset_factory(count)
+            self.assertEqual(len(positions), len(set(positions)))
+
+    @unittest.skipUnless(
+        shutil.which("node"),
+        "需要 Node.js 才能运行跨端影响档行为测试；Node 不是本项目运行依赖。",
+    )
+    def test_python_and_web_impact_cells_use_half_up_rounding(self):
+        from tools import generate_report
+
+        impact_cell = getattr(generate_report, "impact_cell", None)
+        self.assertTrue(callable(impact_cell), "报告生成器必须提供 impact_cell(value)")
+        values = [2.5, 3.5, 4.5]
+        expected = [3, 4, 5]
+        self.assertEqual([impact_cell(value) for value in values], expected)
+
+        html = read_text("web/risk_heatmap.html")
+        match = re.search(
+            r"function impactCell\(value\)\{.*?\n\}", html, re.DOTALL
+        )
+        self.assertIsNotNone(match, "网页必须提供 impactCell(value)")
+        script = (
+            match.group(0)
+            + "\nconsole.log(JSON.stringify([2.5,3.5,4.5].map(impactCell)));"
+        )
+        completed = subprocess.run(
+            ["node", "-"], input=script, text=True, capture_output=True, check=True
+        )
+        self.assertEqual(json.loads(completed.stdout), expected)
+
+    @unittest.skipUnless(
+        shutil.which("node"),
+        "需要 Node.js 才能运行网页气泡定位行为测试；Node 不是本项目运行依赖。",
+    )
+    def test_web_heatmap_offsets_support_eight_risks_around_cell_center(self):
+        html = read_text("web/risk_heatmap.html")
+        match = re.search(
+            r"function cellOffsets\(count\)\{.*?\n\}", html, re.DOTALL
+        )
+        self.assertIsNotNone(match, "网页必须提供 cellOffsets(count)")
+        script = match.group(0) + "\nconsole.log(JSON.stringify(cellOffsets(8)));"
+        completed = subprocess.run(
+            ["node", "-"], input=script, text=True, capture_output=True, check=True
+        )
+        offsets = json.loads(completed.stdout)
+        self.assertEqual(len(offsets), 8)
+        self.assertEqual(len({tuple(point) for point in offsets}), 8)
+        self.assertTrue(
+            all(abs(x) <= 0.5 and abs(y) <= 0.5 for x, y in offsets)
+        )
+
+        draw_body = html.split("function drawHeat(elId,rows,mode){", 1)[1].split(
+            "function renderTrend", 1
+        )[0]
+        self.assertIn("impactCell(a.impact)", draw_body)
+        self.assertNotIn("Math.round(a.impact)", draw_body)
+        self.assertIn("cellOffsets(items.length)", draw_body)
+        self.assertRegex(draw_body, r"ii\s*\+\s*dx")
+        self.assertRegex(draw_body, r"li\s*\+\s*dy")
+        self.assertNotIn("a.impact+dx", draw_body)
+        self.assertNotRegex(draw_body, r"%\s*OFFS\.length")
+
+    def test_heatmap_copy_distinguishes_exact_impact_from_rounded_cell(self):
+        from tools import generate_report
+
+        figure, axis = generate_report.plt.subplots()
+        try:
+            generate_report.draw_bubble_heatmap(
+                axis, [], common.DEFAULT_CONFIG, "inherent", "测试期"
+            )
+            self.assertEqual(axis.get_xlabel(), "综合影响档（四舍五入）")
+        finally:
+            generate_report.plt.close(figure)
+
+        html = read_text("web/risk_heatmap.html")
+        self.assertIn("综合影响档（四舍五入）", html)
+        self.assertIn("四舍五入影响档", html)
+        self.assertIn(
+            "精确影响 ${a.impact.toFixed(2)} / 影响档 ${ii}", html
+        )
+
+        manual = read_text("docs/使用手册.md")
+        self.assertIn("横轴=综合影响档（精确综合影响四舍五入）", manual)
+        self.assertNotIn("横轴=综合影响，", manual)
 
     def test_web_default_config_has_all_eight_weights_summing_to_one(self):
         html = read_text("web/risk_heatmap.html")
