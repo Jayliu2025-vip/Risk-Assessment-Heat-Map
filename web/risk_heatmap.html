@@ -87,7 +87,7 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
 <header>
   <div style="flex:1">
     <h1>审计风险评估热力图谱</h1>
-    <div class="sub">固有 / 剩余双热力图 · 短板效应控制折减 · 多期趋势 · 年度审计优先级</div>
+    <div class="sub"><span id="app-version"></span> · 固有 / 剩余双热力图 · 短板效应控制折减 · 多期趋势 · 年度审计优先级</div>
   </div>
   <div class="bar">
     评估期间
@@ -229,6 +229,7 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
 "use strict";
 const DIMS = ["imp_financial","imp_compliance","imp_operation","imp_reputation",
   "imp_fraud","imp_strategy","imp_data","imp_hse"];
+const APP_VERSION = "1.2";
 const DIM_LABELS = {imp_financial:"经济损失",imp_compliance:"合规法律",imp_operation:"运营中断",
   imp_reputation:"声誉舆情",imp_fraud:"舞弊风险",imp_strategy:"战略影响",
   imp_data:"数据安全",imp_hse:"健康安全"};
@@ -244,7 +245,7 @@ const LEVEL_LABELS = {extreme:"极高",high:"高",medium:"中",low:"低",minimal
 const LEVEL_COLORS = {extreme:"#C00000",high:"#ED7D31",medium:"#FFC000",low:"#8EAADB",minimal:"#70AD47"};
 const FREQ = {extreme:"每年必审",high:"每年审计",medium:"两年一轮",low:"按需抽查",minimal:"按需抽查"};
 const DEFAULT_CFG = {
-  version:"1.1",
+  version:APP_VERSION,
   weights:{imp_financial:.25,imp_compliance:.20,imp_operation:.12,imp_reputation:.10,
     imp_fraud:.10,imp_strategy:.10,imp_data:.08,imp_hse:.05},
   domain_weights:{},
@@ -310,6 +311,7 @@ let state = {config:normalizeConfig(), data:{}, active:null, compare:null};
 let editId = null;
 
 const $ = id => document.getElementById(id);
+$("app-version").textContent=`v${APP_VERSION}`;
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const r2 = x => Math.round(x*100)/100;
 

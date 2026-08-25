@@ -3,11 +3,14 @@
 
 import json
 import re
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
 
 from openpyxl import load_workbook
+from tools import common
+from tools.export_from_excel import read_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +21,45 @@ def read_text(relative_path):
 
 
 class ReleaseConsistencyTests(unittest.TestCase):
+    def test_release_artifacts_share_v12_application_version(self):
+        expected_version = "1.2"
+
+        self.assertEqual(
+            getattr(common, "MODEL_VERSION", None),
+            expected_version,
+            "tools.common.MODEL_VERSION 必须声明当前发布版本",
+        )
+        self.assertEqual(common.DEFAULT_CONFIG["version"], expected_version)
+        self.assertEqual(
+            json.loads(read_text("data/export/config.json"))["version"],
+            expected_version,
+        )
+
+        sample_script = read_text("web/sample_data.js").strip()
+        sample_prefix = "window.SAMPLE_DATA = "
+        self.assertTrue(sample_script.startswith(sample_prefix))
+        sample_data = json.loads(
+            sample_script[len(sample_prefix):].removesuffix(";")
+        )
+        self.assertEqual(sample_data["config"]["version"], expected_version)
+
+        self.assertIn("> 当前版本：1.2", read_text("README.md"))
+        manual = read_text("docs/使用手册.md")
+        self.assertIn("> 版本 1.2", manual)
+        self.assertIn('"version": "1.2"', manual)
+
+        html = read_text("web/risk_heatmap.html")
+        self.assertIn('const APP_VERSION = "1.2";', html)
+        self.assertRegex(html, r"version\s*:\s*APP_VERSION")
+        self.assertIn('id="app-version"', html)
+        self.assertIn('$("app-version").textContent=`v${APP_VERSION}`', html)
+
+        workbook = load_workbook(ROOT / "audit_risk_register.xlsx", data_only=False)
+        self.assertIn("v1.2", workbook["使用说明"]["A1"].value)
+        self.assertEqual(
+            read_config(workbook["参数配置"])["version"], expected_version
+        )
+
     def test_current_user_copy_does_not_contain_legacy_wording(self):
         forbidden_by_file = {
             "README.md": [
@@ -79,6 +121,10 @@ class ReleaseConsistencyTests(unittest.TestCase):
             manual,
         )
 
+    @unittest.skipUnless(
+        shutil.which("node"),
+        "需要 Node.js 才能运行网页配置行为测试；Node 不是本项目运行依赖。",
+    )
     def test_normalize_config_migrates_legacy_rows_and_rejects_bad_fields(self):
         html = read_text("web/risk_heatmap.html")
         config_code = html[html.index("const DIMS ="):html.index("const LS_KEY")]
@@ -107,7 +153,7 @@ console.log(JSON.stringify(migrated));
             "imp_fraud", "imp_strategy", "imp_data", "imp_hse",
         }
         self.assertEqual(set(config), canonical_fields)
-        self.assertEqual(config["version"], "1.1")
+        self.assertEqual(config["version"], "1.2")
         self.assertEqual(config["impact_floor_factor"], 0.75)
         self.assertEqual(config["ref_reduction"], 0.4)
         self.assertEqual(config["reduction_map"]["2"], 0.15)

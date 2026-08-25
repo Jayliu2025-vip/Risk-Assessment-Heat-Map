@@ -15,7 +15,8 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import DEFAULT_CONFIG, DIM_LABELS, DIMS, DOMAINS, LEVEL_COLORS, LEVEL_LABELS
+from common import (DEFAULT_CONFIG, DIM_LABELS, DIMS, DOMAINS, LEVEL_COLORS,
+                    LEVEL_LABELS, MODEL_VERSION)
 from sample_data import P1, P2, sample_controls, sample_risks
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -611,7 +612,7 @@ def build_readme_sheet(wb):
     ws = wb.create_sheet("使用说明", 0)
     ws.sheet_properties.tabColor = "808080"
     lines = [
-        ("审计风险评估热力图谱 · 使用说明", F_TITLE),
+        (f"审计风险评估热力图谱 v{MODEL_VERSION} · 使用说明", F_TITLE),
         ("", None),
         ("【模型】综合影响 = MAX(八维加权分, 一票否决系数×最高维度分)：任一维度打 4/5 分时，致命后果不被其他低分维度稀释。", None),
         ("　　风险领域 12 个、4 大类（战略与治理/财务/运营/合规与安全），对齐《企业内部控制应用指引》与《中央企业全面风险管理指引》。", None),

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """共享评分模型：Excel 导出脚本与 Python 报告脚本共用，保证三件套数值一致。
 
-公式体系（v1.1，含一票否决下限 / 分领域权重 / 关键控制短板 / 控制挽回率）：
+公式体系（v1.2，含一票否决下限 / 分领域权重 / 关键控制短板 / 控制挽回率）：
     综合影响 I = max( Σ(wᵢ×维度ᵢ)/Σ(已评分维度的wᵢ), floor × MAX(已评分维度) )
                                                                     ∈ [1, 5]
                  wᵢ 取该风险所属领域的权重行，未配置领域回退全领域默认
@@ -14,6 +14,8 @@
 import csv
 import json
 import os
+
+MODEL_VERSION = "1.2"
 
 DIMS = ["imp_financial", "imp_compliance", "imp_operation", "imp_reputation",
         "imp_fraud", "imp_strategy", "imp_data", "imp_hse"]
@@ -47,7 +49,7 @@ DOMAIN_CATEGORY = {
 CATEGORY_ORDER = ["战略与治理", "财务", "运营", "合规与安全"]
 
 DEFAULT_CONFIG = {
-    "version": "1.1",
+    "version": MODEL_VERSION,
     "weights": {
         "imp_financial": 0.25,
         "imp_compliance": 0.20,

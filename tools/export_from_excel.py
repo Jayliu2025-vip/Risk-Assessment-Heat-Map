@@ -15,7 +15,7 @@ import sys
 from openpyxl import load_workbook
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import CONTROL_FIELDS, DIMS, RISK_FIELDS
+from common import CONTROL_FIELDS, DIMS, MODEL_VERSION, RISK_FIELDS
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_XLSX = os.path.join(ROOT, "audit_risk_register.xlsx")
@@ -52,7 +52,7 @@ def read_config(ws):
             k: round(float(ws.cell(row=row, column=2 + j).value or 0), 4)
             for j, k in enumerate(dim_keys)
         }
-    return {"version": "1.1", "weights": weights,
+    return {"version": MODEL_VERSION, "weights": weights,
             "domain_weights": domain_weights,
             "impact_floor_factor": impact_floor,
             "reduction_map": reduction_map,

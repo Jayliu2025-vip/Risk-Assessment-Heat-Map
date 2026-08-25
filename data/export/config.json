@@ -1,5 +1,5 @@
 {
-  "version": "1.1",
+  "version": "1.2",
   "weights": {
     "imp_financial": 0.25,
     "imp_compliance": 0.2,
