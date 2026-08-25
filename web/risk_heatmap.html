@@ -133,6 +133,13 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
 
   <div class="panel no-print">
     <h2>数据维护<span class="hint">数据保存在本浏览器 localStorage；与 Excel 真源同步请走 CSV 导入/导出</span></h2>
+    <details style="margin-bottom:12px">
+      <summary style="cursor:pointer;font-weight:700;color:var(--brand);font-size:13px">评分锚点对照表（权威标准版）</summary>
+      <div class="scroll" style="max-height:340px;margin-top:8px">
+        <table id="tbl-anchor"></table>
+      </div>
+      <div class="note">金额刻度以国资委《中央企业违规经营投资责任追究实施办法》资产损失分级为基准；来源：国资委办法、国务院令第 493 号、个保法第 66 条、数安法第 45 条、GDPR Art.83、ACFE 2024、ISO 22301/37001、COSO ERM 2017、IIA 全球内审准则。完整说明见使用手册 3.2 节。</div>
+    </details>
     <div class="toolbar">
       <label class="btn">导入 risks.csv<input type="file" id="file-risks" accept=".csv" hidden></label>
       <label class="btn">导入 controls.csv<input type="file" id="file-controls" accept=".csv" hidden></label>
@@ -505,7 +512,7 @@ function boot(){
   const saved=localStorage.getItem(LS_KEY);
   if(saved){try{state=JSON.parse(saved);}catch(e){}}
   if(!periods().length&&window.SAMPLE_DATA) loadSample();
-  renderSettings();renderAll();
+  renderSettings();renderAnchors();renderAll();
 }
 function loadSample(){
   if(!window.SAMPLE_DATA){alert("未找到内置示例数据（sample_data.js）");return;}
@@ -716,6 +723,46 @@ function showDetail(rid){
   $("drawer").classList.add("open");
 }
 function $$(sel){return Array.from(document.querySelectorAll(sel));}
+
+const ANCHORS = [
+  ["发生可能性", [["1","同行业 5 年内无案例，控制健全且经测试","COSO ERM 2017"],
+    ["2","同行业偶发，本企业 3~5 年内无案例","—"],
+    ["3","本企业 1~2 年内发生过苗头或一般性问题","内审发现/监管通报"],
+    ["4","本企业年内已发生，或同行业高发","ACFE：年均约 5% 营收流失于舞弊"],
+    ["5","已多次发生或正在发生，控制基本失效","—"]]],
+  ["经济损失（国资委资产损失分级 + 493 号令）", [["1","<100 万元：未达“一般资产损失”","国资委办法（一般以下）"],
+    ["2","100~500 万元：一般资产损失","国资委办法"],
+    ["3","500~5000 万元：较大资产损失；较大事故损失区间","国资委办法；493 号令"],
+    ["4","5000 万~1 亿元：重大资产损失；重大事故量级","国资委办法；493 号令"],
+    ["5","≥1 亿元：特别重大事故量级，危及企业生存","493 号令第三条"]]],
+  ["合规法律（个保法/数安法/GDPR + 不良后果三档）", [["1","制度瑕疵，责令整改，无外部后果","—"],
+    ["2","责令限期整改；罚款 <100 万元","个保法第 66 条第一款"],
+    ["3","一般行政处罚 100~1000 万元；责任人被处分","数安法第 45 条"],
+    ["4","情节严重 1000~5000 万或营业额 5%（GDPR 顶格同档）","个保法第 66 条第二款；GDPR"],
+    ["5","刑事移送、停业/吊照；影响社会与国家层面","国资委重大不良后果；刑法/监察法"]]],
+  ["运营中断（493 号令事故等级 + ISO 22301 RTO）", [["1","局部受阻，当日恢复（RTO<8h）","ISO 22301"],
+    ["2","单部门中断，RTO 1~3 天","ISO 22301"],
+    ["3","跨部门中断，RTO 3~30 天；或“一般事故”","493 号令第三条"],
+    ["4","核心业务瘫痪 1~6 个月；或较大/重大事故量级","493 号令第三条"],
+    ["5","集团级瘫痪超 6 个月；或特别重大事故","493 号令第三条"]]],
+  ["声誉舆情（国资委不良后果三档 × 传播层级）", [["1","无外部感知，仅内部知晓","—"],
+    ["2","个别投诉、本地媒体报道，影响限于涉事企业","一般不良后果"],
+    ["3","行业内流传、省级媒体/监管通报","较大不良后果"],
+    ["4","全国性报道、上级通报批评、资本市场负面反应","较大~重大不良后果"],
+    ["5","国家级点名、社会舆论事件、行业整顿","重大不良后果"]]],
+  ["舞弊风险（ACFE 2024 基准 + 职务犯罪管辖）", [["1","无诱因，职责分离健全经测试，无案例","COSO；ISO 37001"],
+    ["2","一般诱因但控制可见；潜在损失 <100 万元","ACFE：中位 $14.5 万"],
+    ["3","诱因集中；潜在损失 100~500 万元","ACFE：75 分位 $75 万"],
+    ["4","诱因高危或有案例；潜在损失 500~5000 万元","国资委较大~重大档"],
+    ["5","系统性舞弊土壤；潜在损失 ≥5000 万或 ≥年营收 5%","ACFE：年均 5% 营收"]]],
+];
+function renderAnchors(){
+  $("tbl-anchor").innerHTML = ANCHORS.map(([title, rows]) =>
+    `<thead><tr><th colspan="3" style="text-align:left">${title}</th></tr>`+
+    `<tr><th style="width:36px">分</th><th>锚点</th><th style="width:180px">权威依据</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td class="num"><b>${r[0]}</b></td><td>${r[1]}</td><td style="color:var(--muted);font-size:11px">${r[2]}</td></tr>`).join("")+
+    "</tbody>").join("");
+}
 
 $("sel-period").addEventListener("change",e=>{state.active=e.target.value;persist();renderAll();});
 $("sel-compare").addEventListener("change",e=>{state.compare=e.target.value||null;persist();renderAll();});
