@@ -1,0 +1,111 @@
+{
+  "version": "1.1",
+  "weights": {
+    "imp_financial": 0.3,
+    "imp_compliance": 0.25,
+    "imp_operation": 0.15,
+    "imp_reputation": 0.15,
+    "imp_fraud": 0.15
+  },
+  "domain_weights": {
+    "战略与投资": {
+      "imp_financial": 0.3,
+      "imp_compliance": 0.15,
+      "imp_operation": 0.25,
+      "imp_reputation": 0.25,
+      "imp_fraud": 0.05
+    },
+    "治理与决策": {
+      "imp_financial": 0.25,
+      "imp_compliance": 0.25,
+      "imp_operation": 0.15,
+      "imp_reputation": 0.25,
+      "imp_fraud": 0.1
+    },
+    "资金活动": {
+      "imp_financial": 0.4,
+      "imp_compliance": 0.25,
+      "imp_operation": 0.1,
+      "imp_reputation": 0.15,
+      "imp_fraud": 0.1
+    },
+    "财务报告与税务": {
+      "imp_financial": 0.35,
+      "imp_compliance": 0.3,
+      "imp_operation": 0.1,
+      "imp_reputation": 0.2,
+      "imp_fraud": 0.05
+    },
+    "资产管理": {
+      "imp_financial": 0.4,
+      "imp_compliance": 0.1,
+      "imp_operation": 0.2,
+      "imp_reputation": 0.15,
+      "imp_fraud": 0.15
+    },
+    "采购与外包": {
+      "imp_financial": 0.25,
+      "imp_compliance": 0.25,
+      "imp_operation": 0.1,
+      "imp_reputation": 0.15,
+      "imp_fraud": 0.25
+    },
+    "合同管理": {
+      "imp_financial": 0.25,
+      "imp_compliance": 0.3,
+      "imp_operation": 0.15,
+      "imp_reputation": 0.2,
+      "imp_fraud": 0.1
+    },
+    "工程项目": {
+      "imp_financial": 0.35,
+      "imp_compliance": 0.15,
+      "imp_operation": 0.2,
+      "imp_reputation": 0.2,
+      "imp_fraud": 0.1
+    },
+    "人力资源": {
+      "imp_financial": 0.2,
+      "imp_compliance": 0.2,
+      "imp_operation": 0.25,
+      "imp_reputation": 0.2,
+      "imp_fraud": 0.15
+    },
+    "信息系统": {
+      "imp_financial": 0.15,
+      "imp_compliance": 0.15,
+      "imp_operation": 0.35,
+      "imp_reputation": 0.2,
+      "imp_fraud": 0.15
+    },
+    "合规与法律": {
+      "imp_financial": 0.15,
+      "imp_compliance": 0.45,
+      "imp_operation": 0.1,
+      "imp_reputation": 0.25,
+      "imp_fraud": 0.05
+    },
+    "安全环保": {
+      "imp_financial": 0.15,
+      "imp_compliance": 0.3,
+      "imp_operation": 0.3,
+      "imp_reputation": 0.25,
+      "imp_fraud": 0.0
+    }
+  },
+  "impact_floor_factor": 0.75,
+  "reduction_map": {
+    "1": 0.0,
+    "2": 0.15,
+    "3": 0.4,
+    "4": 0.55,
+    "5": 0.7
+  },
+  "thresholds": {
+    "extreme": 20,
+    "high": 12,
+    "medium": 6,
+    "low": 3
+  },
+  "ref_reduction": 0.4
+}

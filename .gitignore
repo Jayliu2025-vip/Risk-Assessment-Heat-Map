@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# 编辑器 / 工具
+.opencode/
+.vscode/
+.idea/
+Thumbs.db
+
+# 系统临时文件
+~$*
+*.tmp

@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>审计风险评估热力图谱</title>
+<style>
+:root{
+  --extreme:#C00000;--high:#ED7D31;--medium:#FFC000;--low:#8EAADB;--minimal:#70AD47;
+  --ink:#1F2937;--muted:#6B7280;--line:#E5E7EB;--brand:#1F4E79;--bg:#F7F8FA;--card:#FFFFFF;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:var(--bg);color:var(--ink);font-size:14px}
+header{background:var(--brand);color:#fff;padding:14px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:18px;font-weight:700}
+header .sub{font-size:12px;opacity:.85}
+header select,header button{font:inherit;border:none;border-radius:6px;padding:6px 12px;cursor:pointer}
+header select{background:#fff;color:var(--ink)}
+header button{background:#ffffff22;color:#fff;border:1px solid #ffffff55}
+header button:hover{background:#ffffff33}
+main{max-width:1280px;margin:0 auto;padding:20px 24px 60px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 18px}
+.card .v{font-size:26px;font-weight:700}
+.card .l{font-size:12px;color:var(--muted);margin-top:2px}
+.card.c-extreme .v{color:var(--extreme)}.card.c-high .v{color:var(--high)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:18px}
+.panel h2{font-size:15px;color:var(--brand);margin-bottom:12px}
+.panel h2 .hint{font-weight:400;font-size:12px;color:var(--muted);margin-left:8px}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.charts .box h3{font-size:14px;text-align:center;margin-bottom:6px}
+svg text{font-family:inherit}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:middle}
+th{background:#F1F5FB;color:var(--brand);font-size:12px;white-space:nowrap}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.badge{display:inline-block;color:#fff;font-size:11px;font-weight:700;border-radius:4px;padding:2px 8px}
+.b-extreme{background:var(--extreme)}.b-high{background:var(--high)}
+.b-medium{background:var(--medium)}.b-low{background:var(--low)}.b-minimal{background:var(--minimal)}
+.up{color:var(--extreme);font-weight:700}.down{color:var(--minimal);font-weight:700}
+.flat{color:var(--muted)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+fieldset{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px}
+legend{font-size:12px;color:var(--brand);font-weight:700;padding:0 6px}
+.frow{display:flex;align-items:center;gap:8px;margin:6px 0;flex-wrap:wrap}
+.frow label{min-width:88px;font-size:12px;color:var(--muted)}
+input[type=number],input[type=text],select{font:inherit;border:1px solid var(--line);border-radius:6px;padding:5px 8px;width:110px}
+input[type=text]{width:100%}
+input.err{border-color:var(--extreme);background:#FFF5F5}
+.wsum{font-size:12px;font-weight:700}
+.wsum.ok{color:var(--minimal)}.wsum.bad{color:var(--extreme)}
+.btn{font:inherit;border:1px solid var(--line);background:#fff;border-radius:6px;padding:6px 14px;cursor:pointer}
+.btn.primary{background:var(--brand);color:#fff;border-color:var(--brand)}
+.btn.danger{color:var(--extreme);border-color:var(--extreme)}
+.btn.sm{padding:3px 9px;font-size:12px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.note{font-size:12px;color:var(--muted);margin-top:8px}
+.scroll{max-height:420px;overflow:auto}
+#print-head{display:none}
+.drawer{position:fixed;top:0;right:-400px;width:380px;bottom:0;background:#fff;
+  box-shadow:-6px 0 20px rgba(0,0,0,.18);transition:right .25s ease;z-index:70;
+  padding:16px 18px;overflow:auto}
+.drawer.open{right:0}
+.drawer-head{display:flex;justify-content:space-between;align-items:center;
+  border-bottom:2px solid var(--brand);padding-bottom:8px;margin-bottom:10px}
+.drawer-head b{font-size:15px;color:var(--brand)}
+.drawer h4{font-size:13px;color:var(--brand);margin:14px 0 6px}
+.kv{display:grid;grid-template-columns:92px 1fr;gap:5px 10px;font-size:12.5px}
+.kv span:nth-child(odd){color:var(--muted)}
+.kv b{font-variant-numeric:tabular-nums}
+.drawer table{font-size:12.5px}
+@media print{.drawer{display:none}}
+@media print{
+  body{background:#fff}
+  header .bar,.no-print{display:none!important}
+  #print-head{display:block;text-align:center;margin-bottom:14px}
+  #print-head h1{font-size:20px;color:var(--brand)}
+  #print-head .p{font-size:13px;color:var(--muted)}
+  main{max-width:none;padding:0}
+  .panel{border:none;padding:6px 0;break-inside:avoid}
+  .charts{grid-template-columns:1fr 1fr}
+  .scroll{max-height:none;overflow:visible}
+}
+</style>
+</head>
+<body>
+<header>
+  <div style="flex:1">
+    <h1>审计风险评估热力图谱</h1>
+    <div class="sub">固有 / 剩余双热力图 · 短板效应控制折减 · 多期趋势 · 年度审计优先级</div>
+  </div>
+  <div class="bar">
+    评估期间
+    <select id="sel-period"></select>
+    对比期间
+    <select id="sel-compare"></select>
+    <button id="btn-sample" class="no-print">载入内置示例</button>
+    <button id="btn-print">打印 / 存 PDF</button>
+  </div>
+</header>
+<div id="print-head">
+  <h1>内部审计风险评估热力图谱</h1>
+  <div class="p" id="print-period"></div>
+</div>
+<main>
+  <div class="cards" id="cards"></div>
+
+  <div class="panel">
+    <h2>风险热力图<span class="hint">气泡位置 =（综合影响，发生可能性）；气泡颜色 = 该风险自身等级；点击气泡查看完整档案</span></h2>
+    <div class="charts">
+      <div class="box"><h3>固有风险（未考虑控制）</h3><div id="svg-inh"></div></div>
+      <div class="box"><h3>剩余风险（控制折减后）</h3><div id="svg-res"></div></div>
+    </div>
+    <div class="note">背景格色按“可能性 × 影响档”固有分值铺底；剩余图气泡颜色反映控制生效后的真实等级。</div>
+  </div>
+
+  <div class="panel" id="trend-panel">
+    <h2>两期趋势对比<span class="hint">红 = 剩余风险上升，绿 = 下降；按变化幅度排序</span></h2>
+    <div id="svg-trend"></div>
+    <div class="scroll" style="margin-top:10px"><table id="tbl-trend"></table></div>
+    <div id="matrix-wrap" style="margin-top:14px"></div>
+  </div>
+
+  <div class="panel">
+    <h2>年度审计优先级清单<span class="hint">按剩余风险降序；频次建议：极高=每年必审 / 高=每年审计 / 中=两年一轮 / 低及以下=按需抽查</span></h2>
+    <div class="scroll"><table id="tbl-prio"></table></div>
+    <div class="toolbar no-print" style="margin-top:12px">
+      <button class="btn" id="btn-export-risk">导出当前期 risks.csv</button>
+      <button class="btn" id="btn-export-ctrl">导出当前期 controls.csv</button>
+      <button class="btn" id="btn-export-cfg">导出 config.json</button>
+    </div>
+  </div>
+
+  <div class="panel no-print">
+    <h2>数据维护<span class="hint">数据保存在本浏览器 localStorage；与 Excel 真源同步请走 CSV 导入/导出</span></h2>
+    <div class="toolbar">
+      <label class="btn">导入 risks.csv<input type="file" id="file-risks" accept=".csv" hidden></label>
+      <label class="btn">导入 controls.csv<input type="file" id="file-controls" accept=".csv" hidden></label>
+      <label class="btn">导入 config.json<input type="file" id="file-config" accept=".json" hidden></label>
+      <button class="btn danger" id="btn-reset">清空本机数据</button>
+    </div>
+    <div class="grid2">
+      <div>
+        <fieldset>
+          <legend>风险条目（当前期间）</legend>
+          <div class="frow"><label>编号</label><input type="text" id="f-id" style="width:90px">
+            <label>名称</label><input type="text" id="f-name" style="flex:1;min-width:200px"></div>
+          <div class="frow"><label>领域</label><select id="f-domain"></select>
+            <label>责任部门</label><input type="text" id="f-dept" style="width:140px"></div>
+          <div class="frow"><label>风险描述</label><input type="text" id="f-desc"></div>
+          <div class="frow"><label>打分依据</label><input type="text" id="f-basis" placeholder="审计发现 / 数据 / 外部事件等证据"></div>
+          <div class="frow"><label>可能性</label><input type="number" id="f-lik" min="1" max="5" value="3">
+            <label>经济损失</label><input type="number" class="f-dim" min="1" max="5" value="3">
+            <label>合规法律</label><input type="number" class="f-dim" min="1" max="5" value="3"></div>
+          <div class="frow"><label>运营中断</label><input type="number" class="f-dim" min="1" max="5" value="3">
+            <label>声誉舆情</label><input type="number" class="f-dim" min="1" max="5" value="3">
+            <label>舞弊风险</label><input type="number" class="f-dim" min="1" max="5" value="3"></div>
+          <div class="frow">
+            <button class="btn primary" id="btn-save-risk">保存风险</button>
+            <button class="btn" id="btn-clear-risk">清空表单</button>
+            <span class="note" id="f-msg"></span></div>
+        </fieldset>
+      </div>
+      <div>
+        <fieldset>
+          <legend>控制措施（短板效应：剩余风险按最弱控制点折减）</legend>
+          <div class="frow">
+            <select id="sel-ctrl-risk" style="width:auto;min-width:200px"></select>
+            <input type="text" id="f-ctrl-desc" placeholder="控制点描述" style="flex:1;min-width:140px">
+            <select id="f-ctrl-score"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select>
+            <select id="f-ctrl-key"><option value="是">关键</option><option value="否" selected>一般</option></select>
+            <button class="btn primary sm" id="btn-add-ctrl">添加</button></div>
+          <div class="scroll"><table id="tbl-ctrl"></table></div>
+        </fieldset>
+        <fieldset>
+          <legend>当前期间风险清单</legend>
+          <div class="scroll"><table id="tbl-risks"></table></div>
+        </fieldset>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel no-print">
+    <h2>评分参数<span class="hint">与 Excel「参数配置」页等效；修改即时重算并保存</span></h2>
+    <div class="grid2">
+      <fieldset>
+        <legend>五维影响权重（和须为 1）<span class="wsum" id="wsum"></span></legend>
+        <div id="w-rows"></div>
+      </fieldset>
+      <fieldset>
+        <legend>等级阈值（剩余分 ≥）</legend>
+        <div class="frow"><label>极高</label><input type="number" id="t-extreme" step="0.5"></div>
+        <div class="frow"><label>高</label><input type="number" id="t-high" step="0.5"></div>
+        <div class="frow"><label>中</label><input type="number" id="t-medium" step="0.5"></div>
+        <div class="frow"><label>低</label><input type="number" id="t-low" step="0.5"></div>
+        <legend style="margin-top:10px">控制分 → 折减系数</legend>
+        <div class="frow" id="r-rows"></div>
+        <div class="frow"><label style="min-width:auto">一票否决系数</label>
+          <input type="number" id="f-floor" step="0.05" min="0" max="1" style="width:80px">
+          <span class="note">综合影响 = MAX(加权分, 系数×最高维度分)</span></div>
+      </fieldset>
+    </div>
+    <fieldset>
+      <legend>分领域影响权重（登记册领域的专属权重行；各行列合计须=1，未列领域用“全领域默认”）</legend>
+      <div class="scroll"><table id="tbl-dw"></table></div>
+    </fieldset>
+  </div>
+</main>
+
+<div id="drawer" class="drawer">
+  <div class="drawer-head"><b id="drawer-title"></b>
+    <button class="btn sm" onclick="closeDrawer()">关闭</button></div>
+  <div id="drawer-body"></div>
+</div>
+
+<script src="sample_data.js"></script>
+<script>
+"use strict";
+const DIMS = ["imp_financial","imp_compliance","imp_operation","imp_reputation","imp_fraud"];
+const DIM_LABELS = {imp_financial:"经济损失",imp_compliance:"合规法律",imp_operation:"运营中断",imp_reputation:"声誉舆情",imp_fraud:"舞弊风险"};
+const DOMAINS = ["战略与投资","治理与决策","资金活动","财务报告与税务","资产管理",
+  "采购与外包","合同管理","工程项目","人力资源","信息系统","合规与法律","安全环保"];
+const DOMAIN_CATEGORY = {
+  "战略与投资":"战略与治理","治理与决策":"战略与治理",
+  "资金活动":"财务","财务报告与税务":"财务","资产管理":"财务",
+  "采购与外包":"运营","合同管理":"运营","工程项目":"运营","人力资源":"运营","信息系统":"运营",
+  "合规与法律":"合规与安全","安全环保":"合规与安全"};
+const LEVELS = ["extreme","high","medium","low","minimal"];
+const LEVEL_LABELS = {extreme:"极高",high:"高",medium:"中",low:"低",minimal:"极低"};
+const LEVEL_COLORS = {extreme:"#C00000",high:"#ED7D31",medium:"#FFC000",low:"#8EAADB",minimal:"#70AD47"};
+const FREQ = {extreme:"每年必审",high:"每年审计",medium:"两年一轮",low:"按需抽查",minimal:"按需抽查"};
+const DEFAULT_CFG = {
+  weights:{imp_financial:.30,imp_compliance:.25,imp_operation:.15,imp_reputation:.15,imp_fraud:.15},
+  domain_weights:{},
+  impact_floor:.75,
+  reduction_map:{"1":0,"2":.15,"3":.4,"4":.55,"5":.7},
+  thresholds:{extreme:20,high:12,medium:6,low:3}
+};
+const LS_KEY = "rahm_state_v1";
+let state = {config:JSON.parse(JSON.stringify(DEFAULT_CFG)), data:{}, active:null, compare:null};
+let editId = null;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const r2 = x => Math.round(x*100)/100;
+
+function parseCSV(text){
+  text = text.replace(/^\uFEFF/,"");
+  const rows=[]; let row=[], field="", inQ=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(inQ){
+      if(ch==='"'){ if(text[i+1]==='"'){field+='"';i++;} else inQ=false; }
+      else field+=ch;
+    }else if(ch==='"') inQ=true;
+    else if(ch===","){row.push(field);field="";}
+    else if(ch==="\n"||ch==="\r"){
+      if(ch==="\r"&&text[i+1]==="\n")i++;
+      row.push(field);field="";
+      if(row.some(v=>v!=="")) rows.push(row);
+      row=[];
+    }else field+=ch;
+  }
+  row.push(field);
+  if(row.some(v=>v!=="")) rows.push(row);
+  if(!rows.length) return [];
+  const head=rows[0];
+  return rows.slice(1).map(r=>Object.fromEntries(head.map((h,i)=>[h.trim(),(r[i]??"").trim()])));
+}
+
+function impactOf(r,cfg){
+  const w=(cfg.domain_weights&&cfg.domain_weights[r.domain])||cfg.weights;
+  const lin=DIMS.reduce((s,d)=>s+r[d]*w[d],0);
+  const mx=Math.max(...DIMS.map(d=>r[d]));
+  return r2(Math.max(lin,(cfg.impact_floor??.75)*mx));
+}
+function inherentOf(r,cfg){return r2(r.likelihood*impactOf(r,cfg));}
+function isKey(c){const k=String(c.key??"").trim().toLowerCase();return k==="是"||k==="1"||k==="true"||k==="y";}
+function weakestOf(controls,rid,period){
+  const same=controls.filter(c=>c.risk_id===rid&&c.period===period);
+  if(!same.length)return null;
+  const key=same.filter(isKey);
+  const pool=key.length?key:same;
+  return Math.min(...pool.map(c=>c.score));
+}
+function levelOf(v,cfg){
+  const t=cfg.thresholds;
+  return v>=t.extreme?"extreme":v>=t.high?"high":v>=t.medium?"medium":v>=t.low?"low":"minimal";
+}
+function assess(period){
+  const d=state.data[period]; if(!d) return [];
+  return d.risks.map(r=>{
+    const imp=impactOf(r,state.config), inh=inherentOf(r,state.config);
+    const weak=weakestOf(d.controls,r.risk_id,period);
+    const red=weak===null?0:(state.config.reduction_map[String(weak)]??0);
+    const res=r2(inh*(1-red));
+    return {...r,impact:imp,inherent:inh,weakest:weak,reduction:red,residual:res,
+            recovery:inh>0?r2((inh-res)/inh):null,
+            inherent_level:levelOf(inh,state.config),residual_level:levelOf(res,state.config)};
+  }).sort((a,b)=>b.residual-a.residual);
+}
+function periods(){return Object.keys(state.data).sort();}
+
+function badge(lv){return `<span class="badge b-${lv}">${LEVEL_LABELS[lv]}</span>`;}
+
+function renderCards(rows){
+  const n=rows.length, avg=n?r2(rows.reduce((s,a)=>s+a.residual,0)/n):0;
+  const ne=rows.filter(a=>a.residual_level==="extreme").length;
+  const nh=rows.filter(a=>a.residual_level==="high").length;
+  $("cards").innerHTML=[
+    ["风险总数",n,""],["平均剩余分",avg.toFixed(2),""],
+    ["极高风险",ne,"c-extreme"],["高风险",nh,"c-high"]
+  ].map(([l,v,c])=>`<div class="card ${c}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+}
+
+const OFFS=[[0,0],[-.22,.18],[.22,.18],[-.22,-.18],[.22,-.18],[0,.32],[0,-.32]];
+function bandFill(li,ii){
+  const v=li*ii,t=state.config.thresholds;
+  return v>=t.extreme?LEVEL_COLORS.extreme:v>=t.high?LEVEL_COLORS.high:
+         v>=t.medium?LEVEL_COLORS.medium:v>=t.low?LEVEL_COLORS.low:LEVEL_COLORS.minimal;
+}
+function drawHeat(elId,rows,mode){
+  const W=560,H=532,ML=64,MT=18,MS=56;
+  const cw=(W-ML-14)/5, chh=(H-MT-MS)/5;
+  let s=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">`;
+  for(let li=1;li<=5;li++)for(let ii=1;ii<=5;ii++){
+    const x=ML+(ii-1)*cw, y=MT+(5-li)*chh;
+    s+=`<rect x="${x}" y="${y}" width="${cw}" height="${chh}" fill="${bandFill(li,ii)}" fill-opacity=".26" stroke="#fff" stroke-width="1.5"/>`;
+    s+=`<text x="${x+4}" y="${y+chh-5}" font-size="9" fill="#00000055">${li*ii}</text>`;
+  }
+  const cells={};
+  rows.forEach(a=>{const k=a.likelihood+","+Math.round(a.impact);(cells[k]=cells[k]||[]).push(a);});
+  for(const k in cells){
+    const[li,ii]=k.split(",").map(Number);
+    cells[k].forEach((a,n)=>{
+      const[dx,dy]=OFFS[n%OFFS.length];
+      const cx=ML+(a.impact+dx-.5)*cw+7, cy=MT+(5-(a.likelihood+dy)+.5)*chh-4;
+      const lv=a[mode+"_level"];
+      const tip=`${a.risk_id} ${a.name}\n可能性${a.likelihood} · 影响${a.impact}\n固有${a.inherent} → 剩余${a.residual}${a.weakest?("（关键控制最弱 "+a.weakest+"）"):"（无控制点）"}\n等级：${LEVEL_LABELS[lv]}${a.recovery!=null?`　挽回率 ${(a.recovery*100).toFixed(0)}%`:""}`;
+      s+=`<g onclick="showDetail('${a.risk_id}')" style="cursor:pointer"><title>${esc(tip)}</title><circle cx="${cx}" cy="${cy}" r="15" fill="${LEVEL_COLORS[lv]}" stroke="#fff" stroke-width="1.5"/>`+
+         `<text x="${cx}" y="${cy+3.5}" font-size="8.5" fill="#fff" text-anchor="middle" font-weight="bold">${a.risk_id}</text></g>`;
+    });
+  }
+  for(let i=1;i<=5;i++){
+    s+=`<text x="${ML+(i-.5)*cw}" y="${H-MS+22}" font-size="10" text-anchor="middle" fill="#6B7280">${i}</text>`;
+    s+=`<text x="${ML+(i-.5)*cw}" y="${H-MS+36}" font-size="9" text-anchor="middle" fill="#9CA3AF">${["轻微","较小","中等","较大","重大"][i-1]}</text>`;
+    s+=`<text x="${ML-10}" y="${MT+(5-i+.5)*chh}" font-size="10" text-anchor="end" fill="#6B7280">${i} ${["极低","低","中","高","极高"][i-1]}</text>`;
+  }
+  s+=`<text x="${ML+(W-ML)/2}" y="${H-8}" font-size="11" text-anchor="middle" fill="#374151">综合影响（五维加权）</text>`;
+  s+=`<text x="16" y="${MT+(H-MT-MS)/2}" font-size="11" text-anchor="middle" fill="#374151" transform="rotate(-90 16 ${MT+(H-MT-MS)/2})">发生可能性</text>`;
+  s+="</svg>";
+  $(elId).innerHTML=s;
+}
+
+function renderTrend(base,cmp){
+  const panel=$("trend-panel");
+  if(!cmp||!state.data[cmp]||!state.data[base]){
+    panel.style.display="none";return;
+  }
+  panel.style.display="";
+  const A=assess(base), B=assess(cmp);
+  const prev=Object.fromEntries(B.map(a=>[a.risk_id,a]));
+  const deltas=A.map(a=>({a,prev:prev[a.risk_id]?.residual??null,d:prev[a.risk_id]?r2(a.residual-prev[a.risk_id].residual):null}))
+                .filter(x=>x.d!==null).sort((x,y)=>Math.abs(y.d)-Math.abs(x.d));
+  const show=deltas.slice(0,12).reverse();
+  const W=1100,rh=30,H=show.length*rh+70,L=250,R=80;
+  let s=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">`;
+  const xmax=Math.max(...show.map(x=>Math.max(x.a.residual,x.prev)),10);
+  const xs=v=>L+(v/xmax)*(W-L-R);
+  show.forEach((x,i)=>{
+    const y=22+i*rh;
+    s+=`<line x1="${xs(x.prev)}" y1="${y}" x2="${xs(x.a.residual)}" y2="${y}" stroke="#B8BEC9" stroke-width="2"/>`;
+    s+=`<circle cx="${xs(x.prev)}" cy="${y}" r="5" fill="#7F8794"/><title>${esc(x.a.risk_id+" 上期 "+x.prev)}</title>`;
+    s+=`<circle cx="${xs(x.a.residual)}" cy="${y}" r="7" fill="${x.d>0?LEVEL_COLORS.extreme:LEVEL_COLORS.minimal}"><title>${esc(x.a.risk_id+" 本期 "+x.a.residual)}</title></circle>`;
+    s+=`<text x="${L-8}" y="${y+4}" font-size="11" text-anchor="end" fill="#374151">${x.a.risk_id} ${esc(x.a.name.slice(0,12))}</text>`;
+    s+=`<text x="${Math.max(xs(x.prev),xs(x.a.residual))+12}" y="${y+4}" font-size="11" font-weight="bold" fill="${x.d>0?LEVEL_COLORS.extreme:LEVEL_COLORS.minimal}">${x.d>0?"+":""}${x.d.toFixed(2)}</text>`;
+  });
+  s+=`<text x="${L}" y="${H-18}" font-size="10" fill="#9CA3AF">灰点 = ${esc(cmp)}　彩点 = ${esc(base)}</text></svg>`;
+  $("svg-trend").innerHTML=s;
+  $("tbl-trend").innerHTML=`<thead><tr><th>编号</th><th>风险名称</th><th>领域</th><th class="num">${esc(cmp)}剩余</th><th class="num">${esc(base)}剩余</th><th class="num">变化</th><th>本期等级</th></tr></thead><tbody>`+
+    deltas.map(x=>{
+      const cls=x.d>0?"up":x.d<0?"down":"flat", arr=x.d>0?"▲":x.d<0?"▼":"—";
+      return `<tr><td>${x.a.risk_id}</td><td>${esc(x.a.name)}</td><td>${esc(x.a.domain)}</td><td class="num">${x.prev.toFixed(2)}</td><td class="num">${x.a.residual.toFixed(2)}</td><td class="num ${cls}">${arr} ${x.d.toFixed(2)}</td><td>${badge(x.a.residual_level)}</td></tr>`;
+    }).join("")+"</tbody>";
+  const prevMap=Object.fromEntries(B.map(a=>[a.risk_id,a]));
+  const mat={};LEVELS.forEach(p=>mat[p]={});LEVELS.forEach(c=>LEVELS.forEach(p=>mat[p][c]=0));
+  A.forEach(a=>{const p=prevMap[a.risk_id];if(p)mat[p.residual_level][a.residual_level]++;});
+  $("matrix-wrap").innerHTML=`<table style="max-width:640px"><thead><tr><th>上期＼本期</th>${LEVELS.map(l=>`<th>${LEVEL_LABELS[l]}</th>`).join("")}<th>合计</th></tr></thead><tbody>`+
+    LEVELS.map(p=>{
+      const rowSum=LEVELS.reduce((s,c)=>s+mat[p][c],0);
+      return `<tr><th>${LEVEL_LABELS[p]}</th>`+LEVELS.map(c=>{
+        const n=mat[p][c];
+        return `<td class="num" style="${n?`background:${LEVEL_COLORS[c]}22;font-weight:700;`:''}">${n||""}</td>`;
+      }).join("")+`<td class="num">${rowSum||""}</td></tr>`;
+    }).join("")+"</tbody></table>"+
+    `<div class="note">等级迁徙矩阵：对角线=持平，左下=改善，右上=恶化。改善 ${LEVELS.reduce((s,p,i)=>s+LEVELS.slice(i+1).reduce((x,c)=>x+mat[p][c],0),0)} 条 / 恶化 ${LEVELS.reduce((s,p,i)=>s+LEVELS.slice(0,i).reduce((x,c)=>x+mat[p][c],0),0)} 条。</div>`;
+}
+
+function renderPriority(rows,period){
+  $("tbl-prio").innerHTML=`<thead><tr><th>排名</th><th>编号</th><th>风险名称</th><th>领域</th><th>责任部门</th><th class="num">可能性</th><th class="num">综合影响</th><th class="num">固有</th><th class="num">最弱控制</th><th class="num">剩余</th><th class="num">挽回率</th><th>等级</th><th>建议频次</th></tr></thead><tbody>`+
+    rows.map((a,i)=>`<tr style="cursor:pointer" onclick="showDetail('${a.risk_id}')"><td>${i+1}</td><td>${a.risk_id}</td><td>${esc(a.name)}</td><td>${esc(a.domain)}</td><td>${esc(a.owner_dept)}</td><td class="num">${a.likelihood}</td><td class="num">${a.impact.toFixed(2)}</td><td class="num">${a.inherent.toFixed(2)}</td><td class="num">${a.weakest??"—"}</td><td class="num"><b>${a.residual.toFixed(2)}</b></td><td class="num">${a.recovery==null?"—":(a.recovery*100).toFixed(0)+"%"}</td><td>${badge(a.residual_level)}</td><td>${FREQ[a.residual_level]}</td></tr>`).join("")+"</tbody>";
+}
+
+function renderEditor(rows,period){
+  $("tbl-risks").innerHTML=`<thead><tr><th>编号</th><th>名称</th><th>领域</th><th class="num">剩余</th><th>等级</th><th>操作</th></tr></thead><tbody>`+
+    rows.map(a=>`<tr><td>${a.risk_id}</td><td>${esc(a.name)}</td><td>${esc(a.domain)}</td><td class="num">${a.residual.toFixed(2)}</td><td>${badge(a.residual_level)}</td>`+
+      `<td><button class="btn sm" onclick="editRisk('${a.risk_id}')">编辑</button> <button class="btn sm danger" onclick="delRisk('${a.risk_id}')">删除</button></td></tr>`).join("")+"</tbody>";
+  const sel=$("sel-ctrl-risk");
+  const cur=sel.value;
+  sel.innerHTML=rows.map(a=>`<option value="${a.risk_id}">${a.risk_id} ${esc(a.name.slice(0,14))}</option>`).join("");
+  if(cur&&rows.some(a=>a.risk_id===cur)) sel.value=cur;
+  renderCtrlTable();
+}
+function renderCtrlTable(){
+  const rid=$("sel-ctrl-risk").value;
+  const d=state.data[state.active];
+  const list=(d?.controls||[]).filter(c=>c.risk_id===rid&&c.period===state.active);
+  $("tbl-ctrl").innerHTML=`<thead><tr><th>控制点描述</th><th style="width:90px">有效性</th><th style="width:80px">关键控制</th><th style="width:60px">操作</th></tr></thead><tbody>`+
+    (list.length?list.map(c=>`<tr><td>${esc(c.description)}</td><td><select onchange="setCtrlScore('${c.control_id}',this.value)">${[1,2,3,4,5].map(s=>`<option ${s==c.score?"selected":""}>${s}</option>`).join("")}</select></td>`+
+      `<td><select onchange="setCtrlKey('${c.control_id}',this.value)"><option ${c.key==="是"?"selected":""} value="是">是</option><option ${c.key!=="是"?"selected":""} value="否">否</option></select></td>`+
+      `<td><button class="btn sm danger" onclick="delCtrl('${c.control_id}')">删</button></td></tr>`).join("")
+    :`<tr><td colspan="4" style="color:#9CA3AF">暂无控制点——剩余风险将不做任何折减</td></tr>`)+"</tbody>";
+}
+
+function renderSettings(){
+  const w=$("w-rows");
+  w.innerHTML=DIMS.map(d=>`<div class="frow"><label>${DIM_LABELS[d]}</label><input type="number" step="0.05" min="0" max="1" value="${state.config.weights[d]}" data-w="${d}" onchange="setWeight('${d}',this.value)"></div>`).join("");
+  const t=state.config.thresholds;
+  $("t-extreme").value=t.extreme;$("t-high").value=t.high;$("t-medium").value=t.medium;$("t-low").value=t.low;
+  $("f-floor").value=state.config.impact_floor??.75;
+  $("r-rows").innerHTML=[1,2,3,4,5].map(s=>`<label style="min-width:auto">分${s}</label><input type="number" step="0.05" min="0" max="0.95" style="width:80px" value="${state.config.reduction_map[String(s)]}" onchange="setReduction(${s},this.value)">`).join("");
+  updateWsum();
+  renderDW();
+}
+function ensureDW(name){
+  if(!state.config.domain_weights)state.config.domain_weights={};
+  if(!state.config.domain_weights[name])state.config.domain_weights[name]={...state.config.weights};
+  return state.config.domain_weights[name];
+}
+function renderDW(){
+  const rows=[["__default__","全领域默认",state.config.weights]]
+    .concat(DOMAINS.map(d=>[d,d,ensureDW(d)]));
+  $("tbl-dw").innerHTML=`<thead><tr><th>领域＼维度</th>${DIMS.map(d=>`<th>${DIM_LABELS[d]}</th>`).join("")}<th>行合计</th></tr></thead><tbody>`+
+    rows.map(([key,label,row])=>{
+      const sum=r2(DIMS.reduce((s,d)=>s+ +(row[d]||0),0));
+      const ok=Math.abs(sum-1)<1e-6;
+      return `<tr><td>${label}</td>`+DIMS.map(d=>
+        `<td><input type="number" step="0.05" min="0" max="1" style="width:72px" value="${row[d]||0}" onchange="setDW('${key}','${d}',this.value)"></td>`).join("")+
+        `<td class="num ${ok?"down":"up"}" style="font-weight:700">${sum.toFixed(2)}</td></tr>`;
+    }).join("")+"</tbody>";
+}
+function setDW(name,dim,v){
+  const row=name==="__default__"?state.config.weights:ensureDW(name);
+  row[dim]=+v||0;persist();renderDW();renderAll();
+}
+function setFloor(v){
+  state.config.impact_floor=Math.min(1,Math.max(0,+v||0));
+  persist();renderAll();
+}
+function updateWsum(){
+  const s=r2(DIMS.reduce((a,d)=>a+ +state.config.weights[d],0));
+  const el=$("wsum");
+  el.textContent="当前合计 "+s.toFixed(2);
+  el.className="wsum "+(Math.abs(s-1)<1e-6?"ok":"bad");
+}
+function setWeight(d,v){
+  state.config.weights[d]=+v||0;updateWsum();persist();renderAll();
+}
+function setReduction(s,v){state.config.reduction_map[String(s)]=Math.min(.95,Math.max(0,+v||0));persist();renderAll();}
+function setThreshold(k,v){state.config.thresholds[k]=+v||0;persist();renderAll();}
+
+function renderPeriodOptions(){
+  const ps=periods();
+  const mk=(sel,def)=>{
+    const el=$(sel);
+    el.innerHTML=ps.map(p=>`<option ${p===def?"selected":""}>${p}</option>`).join("");
+  };
+  if(!state.active||!ps.includes(state.active)) state.active=ps[ps.length-1]||null;
+  if(!state.compare||!ps.includes(state.compare)) state.compare=ps.length>1?ps[ps.length-2]:null;
+  mk("sel-period",state.active);
+  $("sel-compare").innerHTML=`<option value="">（不对比）</option>`+ps.map(p=>`<option ${p===state.compare?"selected":""}>${p}</option>`).join("");
+}
+
+function renderAll(){
+  renderPeriodOptions();
+  $("print-period").textContent="评估期间："+(state.active||"—")+(state.compare?"（环比 "+state.compare+"）":"");
+  const rows=assess(state.active||"");
+  renderCards(rows);
+  drawHeat("svg-inh",rows,"inherent");
+  drawHeat("svg-res",rows,"residual");
+  renderTrend(state.active,state.compare);
+  renderPriority(rows,state.active);
+  renderEditor(rows,state.active);
+  const dm=$("f-domain");
+  if(!dm.options.length){
+    const cats={};
+    DOMAINS.forEach(d=>{const c=DOMAIN_CATEGORY[d]||"其他";(cats[c]=cats[c]||[]).push(d);});
+    dm.innerHTML=Object.entries(cats)
+      .map(([c,ds])=>`<optgroup label="${c}">${ds.map(d=>`<option>${d}</option>`).join("")}</optgroup>`).join("");
+  }
+}
+
+function persist(){try{localStorage.setItem(LS_KEY,JSON.stringify(state));}catch(e){}}
+function boot(){
+  const saved=localStorage.getItem(LS_KEY);
+  if(saved){try{state=JSON.parse(saved);}catch(e){}}
+  if(!periods().length&&window.SAMPLE_DATA) loadSample();
+  renderSettings();renderAll();
+}
+function loadSample(){
+  if(!window.SAMPLE_DATA){alert("未找到内置示例数据（sample_data.js）");return;}
+  state.config=JSON.parse(JSON.stringify(SAMPLE_DATA.config));
+  state.data=JSON.parse(JSON.stringify(SAMPLE_DATA.periods));
+  const ps=periods();
+  state.active=ps[ps.length-1];state.compare=ps.length>1?ps[ps.length-2]:null;
+  persist();renderSettings();renderAll();
+}
+
+function importCSV(file,kind){
+  const rd=new FileReader();
+  rd.onload=()=>{
+    const rows=parseCSV(rd.result);
+    if(!rows.length){alert("文件为空");return;}
+    const byPeriod={};
+    rows.forEach(r=>{
+      const p=r.period||state.active||"未标注期间";
+      (byPeriod[p]=byPeriod[p]||[]).push(r);
+    });
+    for(const p in byPeriod){
+      if(!state.data[p]) state.data[p]={risks:[],controls:[]};
+      const num=(v,d)=>{const n=parseInt(v,10);return isNaN(n)?d:n;};
+      if(kind==="risks"){
+        state.data[p].risks=byPeriod[p].map(r=>({
+          risk_id:r.risk_id,name:r.name,domain:r.domain||"未分类",
+          description:r.description||"",owner_dept:r.owner_dept||"",
+          rationale:r.rationale||"",
+          period:p,likelihood:num(r.likelihood,3),
+          ...Object.fromEntries(DIMS.map(d=>[d,num(r[d],3)]))
+        }));
+      }else{
+        const kept=state.data[p].controls.filter(c=>!byPeriod[p].some(r=>r.control_id===c.control_id));
+        state.data[p].controls=kept.concat(byPeriod[p].map(c=>{
+          const k=String(c.key??"").trim().toLowerCase();
+          return {control_id:c.control_id,risk_id:c.risk_id,period:p,
+                  description:c.description||"",score:num(c.score,3),
+                  key:(k==="是"||k==="1"||k==="true"||k==="y")?"是":"否"};
+        }));
+      }
+    }
+    persist();renderAll();
+  };
+  rd.readAsText(file,"utf-8");
+}
+function importConfig(file){
+  const rd=new FileReader();
+  rd.onload=()=>{
+    try{
+      const j=JSON.parse(rd.result);
+      for(const k of ["weights","reduction_map","thresholds"])
+        Object.assign(state.config[k],j[k]||{});
+      if(j.domain_weights){
+        state.config.domain_weights={...(state.config.domain_weights||{}),...j.domain_weights};
+        for(const dom in j.domain_weights)
+          state.config.domain_weights[dom]={...(state.config.domain_weights[dom]||state.config.weights),...j.domain_weights[dom]};
+      }
+      if(j.impact_floor!=null)state.config.impact_floor=+j.impact_floor;
+      persist();renderSettings();renderAll();
+    }catch(e){alert("config.json 解析失败："+e.message);}
+  };
+  rd.readAsText(file,"utf-8");
+}
+function csvEscape(v){
+  v=String(v??"");
+  return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;
+}
+function download(name,text,type){
+  const blob=new Blob(["\uFEFF"+text],{type:type||"text/csv;charset=utf-8"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);a.download=name;a.click();
+  URL.revokeObjectURL(a.href);
+}
+function exportRisks(){
+  const rows=assess(state.active);
+  const head=["risk_id","name","domain","description","owner_dept","period","likelihood"].concat(DIMS).concat(["rationale"]);
+  const lines=[head.join(",")].concat(rows.map(a=>head.map(h=>csvEscape(a[h])).join(",")));
+  download(state.active+"_risks.csv",lines.join("\r\n"));
+}
+function exportControls(){
+  const d=state.data[state.active]||{controls:[]};
+  const head=["control_id","risk_id","period","description","score","key"];
+  const lines=[head.join(",")].concat(d.controls.map(c=>head.map(h=>csvEscape(c[h]??"否")).join(",")));
+  download(state.active+"_controls.csv",lines.join("\r\n"));
+}
+
+function nextRiskId(){
+  const d=state.data[state.active];
+  let mx=0;
+  (d?.risks||[]).forEach(r=>{const m=/^R(\d+)$/.exec(r.risk_id);if(m)mx=Math.max(mx,+m[1]);});
+  return "R"+String(mx+1).padStart(3,"0");
+}
+function saveRisk(){
+  const d=state.data[state.active];
+  if(!d){alert("请先载入或导入数据");return;}
+  const id=$("f-id").value.trim()||nextRiskId();
+  const name=$("f-name").value.trim();
+  if(!name){$("f-msg").textContent="请填写风险名称";return;}
+  const lik=+$("f-lik").value, dims=$$(".f-dim").map(i=>+i.value);
+  const vals=[lik,...dims];
+  if(vals.some(v=>!(v>=1&&v<=5))){$("f-msg").textContent="所有打分须为 1~5";return;}
+  const rec={risk_id:id,name,domain:$("f-domain").value,description:$("f-desc").value.trim(),
+             owner_dept:$("f-dept").value.trim(),period:state.active,
+             rationale:$("f-basis").value.trim(),
+             likelihood:lik,...Object.fromEntries(DIMS.map((dd,i)=>[dd,dims[i]]))};
+  if(editId&&editId!==id){
+    d.risks=d.risks.filter(r=>r.risk_id!==editId);
+    d.controls.forEach(c=>{if(c.risk_id===editId)c.risk_id=id;});
+  }
+  const ix=d.risks.findIndex(r=>r.risk_id===id);
+  if(ix>=0)d.risks[ix]=rec;else d.risks.push(rec);
+  editId=null;$("f-msg").textContent="已保存 "+id;
+  clearRiskForm();persist();renderAll();
+}
+function clearRiskForm(){
+  ["f-name","f-desc","f-dept","f-basis"].forEach(i=>$(i).value="");
+  $("f-id").value="";$("f-lik").value=3;
+  $$(".f-dim").forEach(i=>i.value=3);
+  $("f-msg").textContent="";
+}
+function editRisk(rid){
+  const r=assess(state.active).find(a=>a.risk_id===rid);
+  if(!r)return;
+  editId=rid;
+  $("f-id").value=r.risk_id;$("f-name").value=r.name;
+  $("f-domain").value=DOMAINS.includes(r.domain)?r.domain:DOMAINS[0];
+  $("f-desc").value=r.description;$("f-dept").value=r.owner_dept;
+  $("f-basis").value=r.rationale||"";
+  $("f-lik").value=r.likelihood;
+  $$(".f-dim").forEach((i,ix)=>i.value=r[DIMS[ix]]);
+  $("f-msg").textContent="正在编辑 "+rid;
+  window.scrollTo({top:$("tbl-risks").closest(".panel").offsetTop-20,behavior:"smooth"});
+}
+function delRisk(rid){
+  if(!confirm("删除风险 "+rid+" 及其控制点？"))return;
+  const d=state.data[state.active];
+  d.risks=d.risks.filter(r=>r.risk_id!==rid);
+  d.controls=d.controls.filter(c=>c.risk_id!==rid);
+  if(editId===rid)editId=null;
+  persist();renderAll();
+}
+function addCtrl(){
+  const d=state.data[state.active];
+  if(!d){alert("请先载入或导入数据");return;}
+  const rid=$("sel-ctrl-risk").value;
+  if(!rid){alert("请先添加风险条目");return;}
+  const desc=$("f-ctrl-desc").value.trim();
+  if(!desc){alert("请填写控制点描述");return;}
+  let mx=0;
+  d.controls.forEach(c=>{const m=/^C(\d+)$/.exec(c.control_id);if(m)mx=Math.max(mx,+m[1]);});
+  d.controls.push({control_id:"C"+String(mx+1).padStart(3,"0"),risk_id:rid,
+                   period:state.active,description:desc,score:+$("f-ctrl-score").value,
+                   key:$("f-ctrl-key").value});
+  $("f-ctrl-desc").value="";
+  persist();renderCtrlTable();renderAll();
+}
+function setCtrlKey(cid,v){
+  const c=state.data[state.active].controls.find(x=>x.control_id===cid);
+  if(c){c.key=v;persist();renderAll();}
+}
+function setCtrlScore(cid,v){
+  const c=state.data[state.active].controls.find(x=>x.control_id===cid);
+  if(c){c.score=+v;persist();renderAll();}
+}
+function delCtrl(cid){
+  const d=state.data[state.active];
+  d.controls=d.controls.filter(c=>c.control_id!==cid);
+  persist();renderCtrlTable();renderAll();
+}
+function closeDrawer(){$("drawer").classList.remove("open");}
+function showDetail(rid){
+  const a=assess(state.active).find(x=>x.risk_id===rid);
+  if(!a)return;
+  const d=state.data[state.active];
+  const ctrls=(d?.controls||[]).filter(c=>c.risk_id===rid&&c.period===state.active)
+    .sort((x,y)=>x.score-y.score);
+  let cmpHtml="";
+  if(state.compare&&state.data[state.compare]){
+    const p=assess(state.compare).find(x=>x.risk_id===rid);
+    if(p){
+      const dd=r2(a.residual-p.residual);
+      const cls=dd>0?"up":dd<0?"down":"flat";
+      const arr=dd>0?"▲":dd<0?"▼":"—";
+      cmpHtml=`<h4>两期对比（${esc(state.compare)} → ${esc(state.active)}）</h4>
+        <div class="kv"><span>上期剩余分</span><b>${p.residual.toFixed(2)}</b>
+        <span>变化</span><b class="${cls}">${arr} ${dd.toFixed(2)}</b>
+        <span>上期等级</span><span>${badge(p.residual_level)}</span></div>`;
+    }
+  }
+  $("drawer-title").innerHTML=`${a.risk_id} ${esc(a.name)}`;
+  $("drawer-body").innerHTML=`
+    <div class="kv">
+      <span>领域 / 部门</span><span>${esc(a.domain)} · ${esc(a.owner_dept)||"—"}</span>
+      <span>风险描述</span><span>${esc(a.description)||"—"}</span>
+      <span>打分依据</span><span>${esc(a.rationale)||"—"}</span>
+      <span>发生可能性</span><span>${a.likelihood}（${["极低","低","中","高","极高"][a.likelihood-1]}）</span>
+      ${DIMS.map(dd=>`<span>${DIM_LABELS[dd]}</span><span>${a[dd]}</span>`).join("")}
+      <span>综合影响</span><b>${a.impact.toFixed(2)}</b>
+      <span>固有风险</span><b>${a.inherent.toFixed(2)}（${LEVEL_LABELS[a.inherent_level]}）</b>
+      <span>关键最弱控制</span><span>${a.weakest??("无控制点")}</span>
+      <span>折减系数</span><span>${(a.reduction*100).toFixed(0)}%</span>
+      <span>剩余风险</span><b>${a.residual.toFixed(2)} ${badge(a.residual_level)}</b>
+      <span>控制挽回率</span><span>${a.recovery==null?"—":(a.recovery*100).toFixed(0)+"%"}</span>
+    </div>
+    <h4>控制点（${ctrls.length}）</h4>
+    ${ctrls.length?`<table><tbody>${ctrls.map(c=>`<tr><td>${esc(c.description)}</td><td style="width:52px">${c.score} 分</td><td style="width:46px">${isKey(c)?"<span class='badge b-extreme'>关键</span>":"<span style='color:#9CA3AF'>一般</span>"}</td></tr>`).join("")}</tbody></table>`:"<div class='note'>无控制点，剩余风险=固有风险</div>"}
+    ${cmpHtml}`;
+  $("drawer").classList.add("open");
+}
+function $$(sel){return Array.from(document.querySelectorAll(sel));}
+
+$("sel-period").addEventListener("change",e=>{state.active=e.target.value;persist();renderAll();});
+$("sel-compare").addEventListener("change",e=>{state.compare=e.target.value||null;persist();renderAll();});
+$("btn-sample").addEventListener("click",loadSample);
+$("btn-print").addEventListener("click",()=>window.print());
+$("btn-reset").addEventListener("click",()=>{
+  if(confirm("清空本机保存的全部数据？")){localStorage.removeItem(LS_KEY);location.reload();}
+});
+$("file-risks").addEventListener("change",e=>{if(e.target.files[0])importCSV(e.target.files[0],"risks");e.target.value="";});
+$("file-controls").addEventListener("change",e=>{if(e.target.files[0])importCSV(e.target.files[0],"controls");e.target.value="";});
+$("file-config").addEventListener("change",e=>{if(e.target.files[0])importConfig(e.target.files[0]);e.target.value="";});
+$("btn-export-risk").addEventListener("click",exportRisks);
+$("btn-export-ctrl").addEventListener("click",exportControls);
+$("btn-export-cfg").addEventListener("click",()=>download("config.json",JSON.stringify(state.config,null,2),"application/json"));
+$("btn-save-risk").addEventListener("click",saveRisk);
+$("btn-clear-risk").addEventListener("click",()=>{editId=null;clearRiskForm();});
+$("btn-add-ctrl").addEventListener("click",addCtrl);
+$("sel-ctrl-risk").addEventListener("change",renderCtrlTable);
+["t-extreme","t-high","t-medium","t-low"].forEach((id,i)=>{
+  $(id).addEventListener("change",e=>setThreshold(["extreme","high","medium","low"][i],e.target.value));
+});
+$("f-floor").addEventListener("change",e=>setFloor(e.target.value));
+
+boot();
+</script>
+</body>
+</html>
