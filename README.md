@@ -3,6 +3,8 @@
 通用内审风险评估工具三件套：**Excel 真源工作簿 + Python 出图/出报脚本 + 零依赖网页端**。
 同一套评分模型、同一份数据，三端数值完全一致。
 
+> 当前版本：1.2
+
 风险领域体系对齐权威框架：**《企业内部控制应用指引》18 项**（业务循环颗粒度）×
 **《中央企业全面风险管理指引》**（战略/财务/运营/合规大类）= **4 大类 × 12 领域**
 （详见 `docs/使用手册.md` 3.4 节）。
@@ -12,8 +14,8 @@
 ## 评分模型
 
 ```
-综合影响 I = max( Σ(wᵢ×维度ᵢ), floor × 最高维度分 )
-            维度：经济损失/合规法律/运营中断/声誉舆情/舞弊风险（各1-5）
+综合影响 I = max( Σ(wᵢ×维度ᵢ)/Σ(已评分维度的wᵢ), floor × 最高维度分 )
+            八个影响维度：经济损失/合规法律/运营中断/声誉舆情/舞弊风险/战略影响/数据安全/健康安全（各1-5）
             wᵢ 按"所属领域"取分领域权重矩阵，未列领域用全领域默认行
             floor=一票否决系数（默认0.75）：任一维度打高分时致命后果不被稀释
 固有风险   = 发生可能性 L × I                     ∈ [1, 25]
@@ -32,13 +34,13 @@
 ├── risk_heatmap.html  (web/)     ★ 网页端：双击即用，离线零依赖
 ├── tools/
 │   ├── common.py                 共享评分逻辑（Python 侧唯一实现）
-│   ├── sample_data.py            内置示例数据（6 领域 16 风险 × 2 期）
+│   ├── sample_data.py            内置示例数据（每期 24 条，覆盖 4 大类 12 领域，共 2 期）
 │   ├── build_excel.py            生成/重建真源工作簿
 │   ├── export_from_excel.py      xlsx → CSV 对 + config.json
 │   └── generate_report.py        CSV → PNG 图集 + PDF 高管简报
 ├── data/export/{期间}/           risks.csv + controls.csv（按期间分目录）
 ├── data/export/config.json       权重矩阵/阈值/折减映射/一票否决系数
-├── tests/test_scoring.py         21 项评分模型单元测试（unittest/pytest 兼容）
+├── tests/test_scoring.py         24 项评分模型单元测试（unittest/pytest 兼容）
 └── output/                       热力图 PNG ×2、领域分布、趋势、迁徙矩阵、敏感性、executive_report_*.pdf
 ```
 
@@ -52,6 +54,7 @@
 
 **C. 环境要求**：Python 3.10+，`pip install matplotlib openpyxl`；
 Excel 需 2019/365+（用到 MINIFS/MAXIFS）；网页端无任何依赖。
+Node.js 仅用于发布一致性测试，不是运行依赖。
 
 ## 常用命令
 
@@ -61,7 +64,7 @@ python tools/export_from_excel.py     # xlsx → data/export/{期间}/*.csv + co
 python tools/generate_report.py       # 默认最新期间；--period 2025H2 --compare 2026H1 可指定
 python tools/generate_report.py --sensitivity   # 附加权重敏感性分析图
 python tools/sample_data.py           # 重置示例数据（CSV + 网页内置数据）
-python -m unittest discover -s tests  # 21 项评分模型一致性测试
+python -m unittest discover -s tests  # 24 项评分模型测试 + 发布一致性测试
 ```
 
 ## 汇报输出物

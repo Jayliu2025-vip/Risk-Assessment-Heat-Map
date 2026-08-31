@@ -3,8 +3,8 @@
    （亦兼容 pytest tests/）
 
 金标准数值与 tools/sample_data.py 内置示例绑定：
-R012 2026H1 = 22.00 → 18.70（EDR 关键控制 2 分，折减 15%）
-R013 2026H1 = 12.00 → 10.20（一票否决下限生效，I = 0.75 × 最高维度 4 = 3.00）
+R012 2026H1 = 22.25 → 18.91（八维影响 I=4.45，EDR 关键控制 2 分，折减 15%）
+R013 2026H1 = 15.00 → 12.75（战略影响 5 分触发下限，I = 0.75 × 5 = 3.75）
 """
 import os
 import sys
@@ -20,18 +20,31 @@ from common import (DEFAULT_CONFIG, DIMS, assess_all, composite_impact,
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def mk_risk(lik=3, fin=3, comp=3, ops=3, rep=3, fraud=3, domain="财务收支"):
+def mk_risk(lik=3, fin=3, comp=3, ops=3, rep=3, fraud=3, strat=3, data=3,
+            hse=3, domain="资金活动"):
     return {"risk_id": "RX", "name": "测试", "domain": domain,
             "description": "", "owner_dept": "", "period": "T",
             "likelihood": lik, "imp_financial": fin, "imp_compliance": comp,
-            "imp_operation": ops, "imp_reputation": rep, "imp_fraud": fraud}
+            "imp_operation": ops, "imp_reputation": rep, "imp_fraud": fraud,
+            "imp_strategy": strat, "imp_data": data, "imp_hse": hse}
 
 
 class ImpactTests(unittest.TestCase):
     def test_linear_weighted(self):
         r = mk_risk(fin=4, comp=4, ops=2, rep=3, fraud=4, domain="资金活动")
-        # 资金活动权重 .40/.25/.10/.15/.10 → 1.6+1.0+0.2+0.45+0.4
-        self.assertEqual(composite_impact(r, DEFAULT_CONFIG), 3.65)
+        # 资金活动权重 .32/.20/.08/.12/.08/.10/.06/.04
+        self.assertEqual(composite_impact(r, DEFAULT_CONFIG), 3.52)
+
+    def test_na_dimension_renormalized(self):
+        r = mk_risk(fin=4, comp=None, ops=None, rep=None, fraud=None,
+                    strat=None, data=None, hse=None)
+        # 仅经济损失打分：权重归一化后 I 恰为该维度分值
+        self.assertEqual(composite_impact(r, DEFAULT_CONFIG), 4.0)
+
+    def test_all_dims_blank_returns_none(self):
+        r = mk_risk(fin=None, comp=None, ops=None, rep=None, fraud=None,
+                    strat=None, data=None, hse=None)
+        self.assertIsNone(composite_impact(r, DEFAULT_CONFIG))
 
     def test_floor_dominates(self):
         r = mk_risk(fin=1, comp=1, ops=1, rep=1, fraud=5)  # 合规一票否决型
@@ -40,14 +53,15 @@ class ImpactTests(unittest.TestCase):
         self.assertLessEqual(i, 5)
 
     def test_floor_boundary(self):
-        r = mk_risk(fin=1, comp=1, ops=4, rep=1, fraud=1)
-        # 线性加权仅 1.30，一票否决下限 0.75×4=3.00 生效
+        r = mk_risk(fin=1, comp=1, ops=4, rep=1, fraud=1, strat=1, data=1, hse=1)
+        # 线性加权仅 1.24，一票否决下限 0.75×4=3.00 生效
         self.assertEqual(composite_impact(r, DEFAULT_CONFIG), 3.0)
 
     def test_domain_weights_used(self):
         r = mk_risk(fin=5, comp=1, ops=1, rep=1, fraud=1, domain="资产管理")
         w = effective_weights(r, DEFAULT_CONFIG)
-        self.assertEqual(w["imp_financial"], 0.40)
+        self.assertEqual(w["imp_financial"], 0.32)
+        self.assertEqual(w["imp_hse"], 0.08)
 
     def test_domain_fallback(self):
         r = mk_risk(domain="未收录领域")
@@ -145,27 +159,29 @@ class GoldenDatasetTests(unittest.TestCase):
         a = self.assessed["R012"]
         self.assertEqual((a["impact"], a["inherent"],
                           a["weakest_control"], a["residual"]),
-                         (4.40, 22.00, 2, 18.70))
+                         (4.45, 22.25, 2, 18.91))
         self.assertEqual(a["residual_level"], "high")
-        self.assertAlmostEqual(a["recovery"], 0.15)
+        self.assertAlmostEqual(a["recovery"], 0.1501, places=3)
 
     def test_r013_floor_applied(self):
         a = self.assessed["R013"]
+        # 数据安全/健康安全留空 → 权重重归一化；战略 5 触发一票否决下限 3.75
         self.assertEqual((a["impact"], a["inherent"], a["residual"]),
-                         (3.00, 12.00, 10.20))
+                         (3.75, 15.00, 12.75))
+        self.assertEqual(a["residual_level"], "high")
 
     def test_r004_key_control(self):
         a = self.assessed["R004"]
         self.assertEqual((a["weakest_control"], a["residual"], a["recovery"]),
-                         (4, 7.20, 0.55))
+                         (4, 6.75, 0.55))
 
     def test_prev_period_r012(self):
         _, risks, ctrls = load_dataset(
             os.path.join(ROOT, "data", "export", "2025H2"))
         a = {x["risk_id"]: x for x in assess_all(risks, ctrls, self.cfg)}["R012"]
-        # 分领域权重（信息系统 运营中断 0.35）下 I=4.40，固有 17.60，弱控制 2 → 14.96
+        # 八维权重（信息系统）下 I=4.45，固有 17.80，弱控制 2 → 15.13
         self.assertEqual((a["impact"], a["inherent"], a["residual"]),
-                         (4.40, 17.60, 14.96))
+                         (4.45, 17.80, 15.13))
 
     def test_rationale_field_roundtrip(self):
         self.assertTrue(all(r.get("rationale") for r in self.risks))

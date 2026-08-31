@@ -10,6 +10,12 @@ __pycache__/
 .idea/
 Thumbs.db
 
+# 本地验收 / 外部工具运行产物
+.playwright-cli/
+/logs/
+/output/playwright/
+/tmp/
+
 # 系统临时文件
 ~$*
 *.tmp

@@ -9,6 +9,7 @@
 用法：python tools/generate_report.py [--data-root data/export] [--period 2026H1]
 """
 import argparse
+import math
 import os
 import sys
 from datetime import datetime
@@ -38,6 +39,28 @@ def load_period(data_root, period):
     return d
 
 
+def impact_cell(value):
+    """将正数综合影响按 Excel/JavaScript 口径四舍五入到 1~5 档。"""
+    return math.floor(value + 0.5)
+
+
+def bubble_offsets(count):
+    """返回单元格中心周围的确定性网格偏移，任意数量均不重复。"""
+    if count <= 0:
+        return []
+    columns = min(3, math.ceil(math.sqrt(count)))
+    rows = math.ceil(count / columns)
+    x_step = 0 if columns == 1 else min(0.34, 0.80 / (columns - 1))
+    y_step = 0 if rows == 1 else min(0.34, 0.80 / (rows - 1))
+    x_start = -x_step * (columns - 1) / 2
+    y_start = y_step * (rows - 1) / 2
+    return [
+        (round(x_start + (index % columns) * x_step, 6),
+         round(y_start - (index // columns) * y_step, 6))
+        for index in range(count)
+    ]
+
+
 def draw_bubble_heatmap(ax, assessed, cfg, mode, period):
     # 背景格子按固有值分档淡色铺底，气泡颜色按各自等级
     for li in range(1, 6):
@@ -54,15 +77,13 @@ def draw_bubble_heatmap(ax, assessed, cfg, mode, period):
     # 同格气泡确定性错开
     cells = {}
     for a in assessed:
-        key = (a["likelihood"], round(a["impact"]))
+        key = (a["likelihood"], impact_cell(a["impact"]))
         cells.setdefault(key, []).append(a)
-    offsets = [(0, 0), (-0.22, 0.18), (0.22, 0.18), (-0.22, -0.18),
-               (0.22, -0.18), (0, 0.32), (0, -0.32)]
     for key, items in sorted(cells.items()):
-        for n, a in enumerate(items):
-            dx, dy = offsets[n % len(offsets)]
-            x = a["impact"] + dx
-            y = a["likelihood"] + dy
+        li, ii = key
+        for a, (dx, dy) in zip(items, bubble_offsets(len(items))):
+            x = ii + dx
+            y = li + dy
             lv = a[f"{mode}_level"]
             ax.scatter(x, y, s=430, c=LEVEL_COLORS[lv], edgecolors="white",
                        linewidths=1.4, zorder=3)
@@ -77,7 +98,7 @@ def draw_bubble_heatmap(ax, assessed, cfg, mode, period):
     ax.set_yticks(range(1, 6))
     ax.set_xticklabels([f"{i}\n{IMP_LABELS[i]}" for i in range(1, 6)], fontsize=9)
     ax.set_yticklabels([f"{i} {LIK_LABELS[i]}" for i in range(1, 6)], fontsize=9)
-    ax.set_xlabel("综合影响（五维加权）", fontsize=11)
+    ax.set_xlabel("综合影响档（四舍五入）", fontsize=11)
     ax.set_ylabel("发生可能性", fontsize=11)
     tag = "固有" if mode == "inherent" else "剩余"
     ax.set_title(f"{tag}风险评估热力图 · {period}（n={len(assessed)}）",
@@ -236,7 +257,8 @@ def sensitivity_analysis(ax, cfg, risks, controls, base_rank, top_ids):
         s.set_visible(False)
     stable = sum(1 for o in overlaps if o == 5)
     worst = min(overlaps)
-    ax.set_title(f"权重敏感性分析：各维度权重 ±20% 下的剩余风险排名（TOP5 稳定 {stable}/10，"
+    n_scen = len(overlaps)
+    ax.set_title(f"权重敏感性分析：各维度权重 ±20% 下的剩余风险排名（TOP5 稳定 {stable}/{n_scen}，"
                  f"最差场景重合 {worst}/5）", fontsize=12.5, weight="bold", pad=12)
     return stable, worst, overlaps
 
@@ -370,14 +392,14 @@ def main():
         ranked = sorted(assessed, key=lambda x: -x["residual"])
         base_rank = {a["risk_id"]: i + 1 for i, a in enumerate(ranked)}
         top_ids = [a["risk_id"] for a in ranked[:8]]
-        fig, ax = plt.subplots(figsize=(11, 6))
+        fig, ax = plt.subplots(figsize=(11, 8.5))
         stable, worst, overlaps = sensitivity_analysis(ax, cfg, risks_b, controls_b,
                                                        base_rank, top_ids)
         fig.tight_layout()
         f6 = f"sensitivity_{base_p}.png"
         fig.savefig(os.path.join(args.outdir, f6), dpi=150, bbox_inches="tight")
         print(f"\n[权重敏感性分析] 各维度 ±20% 扰动（逐行归一化），TOP5 与基准重合度："
-              f"{overlaps} → 完全稳定 {stable}/10，最差 {worst}/5")
+              f"{overlaps} → 完全稳定 {stable}/{len(overlaps)}，最差 {worst}/5")
 
     pdf_path = os.path.join(args.outdir, f"executive_report_{base_p}.pdf")
     with PdfPages(pdf_path) as pdf:

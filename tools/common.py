@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """共享评分模型：Excel 导出脚本与 Python 报告脚本共用，保证三件套数值一致。
 
-公式体系（v1.1，含一票否决下限 / 分领域权重 / 关键控制短板 / 控制挽回率）：
-    综合影响 I = max( Σ(wᵢ×维度ᵢ), floor × MAX(各维度) )     ∈ [1, 5]
+公式体系（v1.2，含一票否决下限 / 分领域权重 / 关键控制短板 / 控制挽回率）：
+    综合影响 I = max( Σ(wᵢ×维度ᵢ)/Σ(已评分维度的wᵢ), floor × MAX(已评分维度) )
+                                                                    ∈ [1, 5]
                  wᵢ 取该风险所属领域的权重行，未配置领域回退全领域默认
     固有风险   = 可能性 L × I                                ∈ [1, 25]
     控制分     = MIN(关键控制点得分)（无关键标记 → 退回全部控制点取 MIN）
@@ -14,13 +15,19 @@ import csv
 import json
 import os
 
-DIMS = ["imp_financial", "imp_compliance", "imp_operation", "imp_reputation", "imp_fraud"]
+MODEL_VERSION = "1.2"
+
+DIMS = ["imp_financial", "imp_compliance", "imp_operation", "imp_reputation",
+        "imp_fraud", "imp_strategy", "imp_data", "imp_hse"]
 DIM_LABELS = {
     "imp_financial": "经济损失",
     "imp_compliance": "合规法律",
     "imp_operation": "运营中断",
     "imp_reputation": "声誉舆情",
     "imp_fraud": "舞弊风险",
+    "imp_strategy": "战略影响",
+    "imp_data": "数据安全",
+    "imp_hse": "健康安全",
 }
 RISK_FIELDS = ["risk_id", "name", "domain", "description", "owner_dept",
                "period", "likelihood"] + DIMS + ["rationale"]
@@ -42,39 +49,54 @@ DOMAIN_CATEGORY = {
 CATEGORY_ORDER = ["战略与治理", "财务", "运营", "合规与安全"]
 
 DEFAULT_CONFIG = {
-    "version": "1.1",
+    "version": MODEL_VERSION,
     "weights": {
-        "imp_financial": 0.30,
-        "imp_compliance": 0.25,
-        "imp_operation": 0.15,
-        "imp_reputation": 0.15,
-        "imp_fraud": 0.15,
+        "imp_financial": 0.25,
+        "imp_compliance": 0.20,
+        "imp_operation": 0.12,
+        "imp_reputation": 0.10,
+        "imp_fraud": 0.10,
+        "imp_strategy": 0.10,
+        "imp_data": 0.08,
+        "imp_hse": 0.05,
     },
     "domain_weights": {
-        "战略与投资": {"imp_financial": 0.30, "imp_compliance": 0.15, "imp_operation": 0.25,
-                    "imp_reputation": 0.25, "imp_fraud": 0.05},
-        "治理与决策": {"imp_financial": 0.25, "imp_compliance": 0.25, "imp_operation": 0.15,
-                    "imp_reputation": 0.25, "imp_fraud": 0.10},
-        "资金活动": {"imp_financial": 0.40, "imp_compliance": 0.25, "imp_operation": 0.10,
-                   "imp_reputation": 0.15, "imp_fraud": 0.10},
-        "财务报告与税务": {"imp_financial": 0.35, "imp_compliance": 0.30, "imp_operation": 0.10,
-                       "imp_reputation": 0.20, "imp_fraud": 0.05},
-        "资产管理": {"imp_financial": 0.40, "imp_compliance": 0.10, "imp_operation": 0.20,
-                   "imp_reputation": 0.15, "imp_fraud": 0.15},
-        "采购与外包": {"imp_financial": 0.25, "imp_compliance": 0.25, "imp_operation": 0.10,
-                     "imp_reputation": 0.15, "imp_fraud": 0.25},
-        "合同管理": {"imp_financial": 0.25, "imp_compliance": 0.30, "imp_operation": 0.15,
-                   "imp_reputation": 0.20, "imp_fraud": 0.10},
-        "工程项目": {"imp_financial": 0.35, "imp_compliance": 0.15, "imp_operation": 0.20,
-                   "imp_reputation": 0.20, "imp_fraud": 0.10},
-        "人力资源": {"imp_financial": 0.20, "imp_compliance": 0.20, "imp_operation": 0.25,
-                   "imp_reputation": 0.20, "imp_fraud": 0.15},
-        "信息系统": {"imp_financial": 0.15, "imp_compliance": 0.15, "imp_operation": 0.35,
-                   "imp_reputation": 0.20, "imp_fraud": 0.15},
-        "合规与法律": {"imp_financial": 0.15, "imp_compliance": 0.45, "imp_operation": 0.10,
-                    "imp_reputation": 0.25, "imp_fraud": 0.05},
-        "安全环保": {"imp_financial": 0.15, "imp_compliance": 0.30, "imp_operation": 0.30,
-                   "imp_reputation": 0.25, "imp_fraud": 0.00},
+        "战略与投资": {"imp_financial": 0.20, "imp_compliance": 0.10, "imp_operation": 0.20,
+                    "imp_reputation": 0.20, "imp_fraud": 0.05, "imp_strategy": 0.20,
+                    "imp_data": 0.03, "imp_hse": 0.02},
+        "治理与决策": {"imp_financial": 0.18, "imp_compliance": 0.20, "imp_operation": 0.12,
+                    "imp_reputation": 0.20, "imp_fraud": 0.08, "imp_strategy": 0.18,
+                    "imp_data": 0.03, "imp_hse": 0.01},
+        "资金活动": {"imp_financial": 0.32, "imp_compliance": 0.20, "imp_operation": 0.08,
+                   "imp_reputation": 0.12, "imp_fraud": 0.08, "imp_strategy": 0.10,
+                   "imp_data": 0.06, "imp_hse": 0.04},
+        "财务报告与税务": {"imp_financial": 0.28, "imp_compliance": 0.25, "imp_operation": 0.08,
+                       "imp_reputation": 0.16, "imp_fraud": 0.04, "imp_strategy": 0.10,
+                       "imp_data": 0.06, "imp_hse": 0.03},
+        "资产管理": {"imp_financial": 0.32, "imp_compliance": 0.08, "imp_operation": 0.16,
+                   "imp_reputation": 0.12, "imp_fraud": 0.12, "imp_strategy": 0.08,
+                   "imp_data": 0.04, "imp_hse": 0.08},
+        "采购与外包": {"imp_financial": 0.20, "imp_compliance": 0.20, "imp_operation": 0.08,
+                     "imp_reputation": 0.12, "imp_fraud": 0.20, "imp_strategy": 0.08,
+                     "imp_data": 0.05, "imp_hse": 0.07},
+        "合同管理": {"imp_financial": 0.20, "imp_compliance": 0.25, "imp_operation": 0.12,
+                   "imp_reputation": 0.16, "imp_fraud": 0.08, "imp_strategy": 0.12,
+                   "imp_data": 0.04, "imp_hse": 0.03},
+        "工程项目": {"imp_financial": 0.28, "imp_compliance": 0.12, "imp_operation": 0.16,
+                   "imp_reputation": 0.16, "imp_fraud": 0.08, "imp_strategy": 0.10,
+                   "imp_data": 0.02, "imp_hse": 0.08},
+        "人力资源": {"imp_financial": 0.15, "imp_compliance": 0.16, "imp_operation": 0.20,
+                   "imp_reputation": 0.16, "imp_fraud": 0.12, "imp_strategy": 0.12,
+                   "imp_data": 0.04, "imp_hse": 0.05},
+        "信息系统": {"imp_financial": 0.10, "imp_compliance": 0.12, "imp_operation": 0.28,
+                   "imp_reputation": 0.16, "imp_fraud": 0.12, "imp_strategy": 0.08,
+                   "imp_data": 0.12, "imp_hse": 0.02},
+        "合规与法律": {"imp_financial": 0.10, "imp_compliance": 0.38, "imp_operation": 0.08,
+                    "imp_reputation": 0.20, "imp_fraud": 0.04, "imp_strategy": 0.08,
+                    "imp_data": 0.10, "imp_hse": 0.02},
+        "安全环保": {"imp_financial": 0.10, "imp_compliance": 0.22, "imp_operation": 0.22,
+                   "imp_reputation": 0.18, "imp_fraud": 0.00, "imp_strategy": 0.06,
+                   "imp_data": 0.02, "imp_hse": 0.20},
     },
     "impact_floor_factor": 0.75,
     "reduction_map": {"1": 0.00, "2": 0.15, "3": 0.40, "4": 0.55, "5": 0.70},
@@ -136,14 +158,29 @@ def effective_weights(risk, cfg):
 
 
 def composite_impact(risk, cfg):
+    """八维加权；留空（None）的维度视为不适用，权重在已打分维度上重新归一化。
+    返回 None 表示该风险未打任何影响维度分。"""
     w = effective_weights(risk, cfg)
-    linear = sum(risk[d] * w[d] for d in DIMS)
-    floor = cfg.get("impact_floor_factor", 0.75) * max(risk[d] for d in DIMS)
-    return round(max(linear, floor), 2)
+    lin = 0.0
+    wsum = 0.0
+    mx = 0
+    for d in DIMS:
+        v = risk.get(d)
+        if not isinstance(v, int):
+            continue
+        ww = w.get(d, 0)
+        lin += v * ww
+        wsum += ww
+        mx = max(mx, v)
+    if wsum == 0:
+        return None
+    floor = cfg.get("impact_floor_factor", 0.75) * mx
+    return round(max(lin / wsum, floor), 2)
 
 
 def inherent_score(risk, cfg):
-    return round(risk["likelihood"] * composite_impact(risk, cfg), 2)
+    impact = composite_impact(risk, cfg)
+    return None if impact is None else round(risk["likelihood"] * impact, 2)
 
 
 def weakest_control_score(controls, risk_id, period):
@@ -186,7 +223,7 @@ def assess_all(risks, controls, cfg):
     for r in risks:
         inh = inherent_score(r, cfg)
         weak = weakest_control_score(controls, r["risk_id"], r["period"])
-        res = residual_score(inh, weak, cfg)
+        res = residual_score(inh, weak, cfg) if inh is not None else None
         out.append({
             **r,
             "impact": composite_impact(r, cfg),
@@ -194,9 +231,10 @@ def assess_all(risks, controls, cfg):
             "weakest_control": weak,
             "reduction": reduction_of(weak, cfg),
             "residual": res,
-            "recovery": round((inh - res) / inh, 4) if inh > 0 else None,
-            "inherent_level": level_of(inh, cfg),
-            "residual_level": level_of(res, cfg),
+            "recovery": round((inh - res) / inh, 4)
+                if inh is not None and inh > 0 else None,
+            "inherent_level": level_of(inh, cfg) if inh is not None else "minimal",
+            "residual_level": level_of(res, cfg) if res is not None else "minimal",
         })
     return out
 
@@ -219,7 +257,8 @@ def load_dataset(data_dir, config_path=None):
     risks = [{**{k: r.get(k, "") for k in ("risk_id", "name", "domain", "description",
                                            "owner_dept", "period", "rationale")},
               "likelihood": int(r["likelihood"]),
-              **{d: int(r[d]) for d in DIMS}} for r in risks_raw]
+              **{d: (None if not str(r.get(d, "")).strip() else int(r[d]))
+                 for d in DIMS}} for r in risks_raw]
     controls = [{**{k: c[k] for k in ("control_id", "risk_id", "period", "description")},
                  "score": int(c["score"]), "key": c.get("key", "否")}
                 for c in controls_raw]

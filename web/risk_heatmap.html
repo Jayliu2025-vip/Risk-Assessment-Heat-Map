@@ -87,7 +87,7 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
 <header>
   <div style="flex:1">
     <h1>审计风险评估热力图谱</h1>
-    <div class="sub">固有 / 剩余双热力图 · 短板效应控制折减 · 多期趋势 · 年度审计优先级</div>
+    <div class="sub"><span id="app-version"></span> · 固有 / 剩余双热力图 · 短板效应控制折减 · 多期趋势 · 年度审计优先级</div>
   </div>
   <div class="bar">
     评估期间
@@ -106,7 +106,7 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
   <div class="cards" id="cards"></div>
 
   <div class="panel">
-    <h2>风险热力图<span class="hint">气泡位置 =（综合影响，发生可能性）；气泡颜色 = 该风险自身等级；点击气泡查看完整档案</span></h2>
+    <h2>风险热力图<span class="hint">气泡位置 =（四舍五入影响档，发生可能性）；悬停显示精确影响 / 影响档；气泡颜色 = 该风险自身等级；点击气泡查看完整档案</span></h2>
     <div class="charts">
       <div class="box"><h3>固有风险（未考虑控制）</h3><div id="svg-inh"></div></div>
       <div class="box"><h3>剩余风险（控制折减后）</h3><div id="svg-res"></div></div>
@@ -157,11 +157,15 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
           <div class="frow"><label>风险描述</label><input type="text" id="f-desc"></div>
           <div class="frow"><label>打分依据</label><input type="text" id="f-basis" placeholder="审计发现 / 数据 / 外部事件等证据"></div>
           <div class="frow"><label>可能性</label><input type="number" id="f-lik" min="1" max="5" value="3">
-            <label>经济损失</label><input type="number" class="f-dim" min="1" max="5" value="3">
-            <label>合规法律</label><input type="number" class="f-dim" min="1" max="5" value="3"></div>
-          <div class="frow"><label>运营中断</label><input type="number" class="f-dim" min="1" max="5" value="3">
-            <label>声誉舆情</label><input type="number" class="f-dim" min="1" max="5" value="3">
-            <label>舞弊风险</label><input type="number" class="f-dim" min="1" max="5" value="3"></div>
+            <label>经济损失</label><input type="number" class="f-dim" min="1" max="5" placeholder="N/A">
+            <label>合规法律</label><input type="number" class="f-dim" min="1" max="5" placeholder="N/A"></div>
+          <div class="frow"><label>运营中断</label><input type="number" class="f-dim" min="1" max="5" placeholder="N/A">
+            <label>声誉舆情</label><input type="number" class="f-dim" min="1" max="5" placeholder="N/A">
+            <label>舞弊风险</label><input type="number" class="f-dim" min="1" max="5" placeholder="N/A"></div>
+          <div class="frow"><label>战略影响</label><input type="number" class="f-dim" min="1" max="5" placeholder="N/A">
+            <label>数据安全</label><input type="number" class="f-dim" min="1" max="5" placeholder="N/A">
+            <label>健康安全</label><input type="number" class="f-dim" min="1" max="5" placeholder="N/A"></div>
+          <div class="frow"><span class="note">影响维度可留空=不适用，权重在已打分维度上重新归一化</span></div>
           <div class="frow">
             <button class="btn primary" id="btn-save-risk">保存风险</button>
             <button class="btn" id="btn-clear-risk">清空表单</button>
@@ -191,7 +195,7 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
     <h2>评分参数<span class="hint">与 Excel「参数配置」页等效；修改即时重算并保存</span></h2>
     <div class="grid2">
       <fieldset>
-        <legend>五维影响权重（和须为 1）<span class="wsum" id="wsum"></span></legend>
+        <legend>八维影响权重（和须为 1）<span class="wsum" id="wsum"></span></legend>
         <div id="w-rows"></div>
       </fieldset>
       <fieldset>
@@ -223,8 +227,12 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
 <script src="sample_data.js"></script>
 <script>
 "use strict";
-const DIMS = ["imp_financial","imp_compliance","imp_operation","imp_reputation","imp_fraud"];
-const DIM_LABELS = {imp_financial:"经济损失",imp_compliance:"合规法律",imp_operation:"运营中断",imp_reputation:"声誉舆情",imp_fraud:"舞弊风险"};
+const DIMS = ["imp_financial","imp_compliance","imp_operation","imp_reputation",
+  "imp_fraud","imp_strategy","imp_data","imp_hse"];
+const APP_VERSION = "1.2";
+const DIM_LABELS = {imp_financial:"经济损失",imp_compliance:"合规法律",imp_operation:"运营中断",
+  imp_reputation:"声誉舆情",imp_fraud:"舞弊风险",imp_strategy:"战略影响",
+  imp_data:"数据安全",imp_hse:"健康安全"};
 const DOMAINS = ["战略与投资","治理与决策","资金活动","财务报告与税务","资产管理",
   "采购与外包","合同管理","工程项目","人力资源","信息系统","合规与法律","安全环保"];
 const DOMAIN_CATEGORY = {
@@ -237,17 +245,73 @@ const LEVEL_LABELS = {extreme:"极高",high:"高",medium:"中",low:"低",minimal
 const LEVEL_COLORS = {extreme:"#C00000",high:"#ED7D31",medium:"#FFC000",low:"#8EAADB",minimal:"#70AD47"};
 const FREQ = {extreme:"每年必审",high:"每年审计",medium:"两年一轮",low:"按需抽查",minimal:"按需抽查"};
 const DEFAULT_CFG = {
-  weights:{imp_financial:.30,imp_compliance:.25,imp_operation:.15,imp_reputation:.15,imp_fraud:.15},
+  version:APP_VERSION,
+  weights:{imp_financial:.25,imp_compliance:.20,imp_operation:.12,imp_reputation:.10,
+    imp_fraud:.10,imp_strategy:.10,imp_data:.08,imp_hse:.05},
   domain_weights:{},
-  impact_floor:.75,
+  impact_floor_factor:.75,
   reduction_map:{"1":0,"2":.15,"3":.4,"4":.55,"5":.7},
-  thresholds:{extreme:20,high:12,medium:6,low:3}
+  thresholds:{extreme:20,high:12,medium:6,low:3},
+  ref_reduction:.4
 };
+function finiteNumber(value,fallback){
+  if(value==null||value==="")return fallback;
+  const number=Number(value);
+  return Number.isFinite(number)?number:fallback;
+}
+function normalizeWeightRow(rawRow,fallbackRow){
+  const source=(rawRow&&typeof rawRow==="object"&&!Array.isArray(rawRow))?rawRow:{};
+  const fallbackValues=Object.fromEntries(DIMS.map(d=>[
+    d,Math.max(0,finiteNumber(fallbackRow?.[d],0))
+  ]));
+  const fallbackTotal=DIMS.reduce((sum,d)=>sum+fallbackValues[d],0);
+  const fallback=fallbackTotal>0
+    ?Object.fromEntries(DIMS.map(d=>[d,fallbackValues[d]/fallbackTotal]))
+    :Object.fromEntries(DIMS.map(d=>[d,1/DIMS.length]));
+  const provided={};
+  DIMS.forEach(d=>{
+    if(!Object.prototype.hasOwnProperty.call(source,d))return;
+    const value=finiteNumber(source[d],NaN);
+    if(value>=0)provided[d]=value;
+  });
+  const providedSum=Object.values(provided).reduce((sum,value)=>sum+value,0);
+  if(!(providedSum>0))return {...fallback};
+  const missing=DIMS.filter(d=>!Object.prototype.hasOwnProperty.call(provided,d));
+  const missingBudget=missing.reduce((sum,d)=>sum+fallback[d],0);
+  const providedBudget=Math.max(0,1-missingBudget);
+  const normalized=Object.fromEntries(DIMS.map(d=>[
+    d,Object.prototype.hasOwnProperty.call(provided,d)
+      ?provided[d]/providedSum*providedBudget
+      :fallback[d]
+  ]));
+  const total=DIMS.reduce((sum,d)=>sum+normalized[d],0);
+  return Object.fromEntries(DIMS.map(d=>[d,normalized[d]/total]));
+}
+function normalizeConfig(raw={}){
+  const source=(raw&&typeof raw==="object"&&!Array.isArray(raw))?raw:{};
+  const weights=normalizeWeightRow(source.weights,DEFAULT_CFG.weights);
+  const rawDomains=(source.domain_weights&&typeof source.domain_weights==="object"&&!Array.isArray(source.domain_weights))
+    ?source.domain_weights:{};
+  return {
+    version:(typeof source.version==="string"&&source.version.trim())?source.version:DEFAULT_CFG.version,
+    weights,
+    domain_weights:Object.fromEntries(Object.entries(rawDomains)
+      .map(([domain,row])=>[domain,normalizeWeightRow(row,weights)])),
+    impact_floor_factor:finiteNumber(
+      source.impact_floor_factor??source.impact_floor,DEFAULT_CFG.impact_floor_factor),
+    reduction_map:Object.fromEntries(Object.entries(DEFAULT_CFG.reduction_map)
+      .map(([score,value])=>[score,finiteNumber(source.reduction_map?.[score],value)])),
+    thresholds:Object.fromEntries(Object.entries(DEFAULT_CFG.thresholds)
+      .map(([level,value])=>[level,finiteNumber(source.thresholds?.[level],value)])),
+    ref_reduction:finiteNumber(source.ref_reduction,DEFAULT_CFG.ref_reduction)
+  };
+}
 const LS_KEY = "rahm_state_v1";
-let state = {config:JSON.parse(JSON.stringify(DEFAULT_CFG)), data:{}, active:null, compare:null};
+let state = {config:normalizeConfig(), data:{}, active:null, compare:null};
 let editId = null;
 
 const $ = id => document.getElementById(id);
+$("app-version").textContent=`v${APP_VERSION}`;
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const r2 = x => Math.round(x*100)/100;
 
@@ -277,11 +341,20 @@ function parseCSV(text){
 
 function impactOf(r,cfg){
   const w=(cfg.domain_weights&&cfg.domain_weights[r.domain])||cfg.weights;
-  const lin=DIMS.reduce((s,d)=>s+r[d]*w[d],0);
-  const mx=Math.max(...DIMS.map(d=>r[d]));
-  return r2(Math.max(lin,(cfg.impact_floor??.75)*mx));
+  let lin=0,wsum=0,mx=0;
+  DIMS.forEach(d=>{
+    const v=r[d];
+    if(v==null||v==="")return;
+    const ww=w[d]||0;
+    lin+=v*ww;wsum+=ww;mx=Math.max(mx,v);
+  });
+  if(!wsum)return null;
+  return r2(Math.max(lin/wsum,(cfg.impact_floor_factor??.75)*mx));
 }
-function inherentOf(r,cfg){return r2(r.likelihood*impactOf(r,cfg));}
+function inherentOf(r,cfg){
+  const i=impactOf(r,cfg);
+  return i==null?null:r2(r.likelihood*i);
+}
 function isKey(c){const k=String(c.key??"").trim().toLowerCase();return k==="是"||k==="1"||k==="true"||k==="y";}
 function weakestOf(controls,rid,period){
   const same=controls.filter(c=>c.risk_id===rid&&c.period===period);
@@ -300,18 +373,20 @@ function assess(period){
     const imp=impactOf(r,state.config), inh=inherentOf(r,state.config);
     const weak=weakestOf(d.controls,r.risk_id,period);
     const red=weak===null?0:(state.config.reduction_map[String(weak)]??0);
-    const res=r2(inh*(1-red));
+    const res=(inh==null)?null:r2(inh*(1-red));
     return {...r,impact:imp,inherent:inh,weakest:weak,reduction:red,residual:res,
-            recovery:inh>0?r2((inh-res)/inh):null,
-            inherent_level:levelOf(inh,state.config),residual_level:levelOf(res,state.config)};
-  }).sort((a,b)=>b.residual-a.residual);
+            recovery:(inh&&inh>0)?r2((inh-res)/inh):null,
+            inherent_level:inh==null?"minimal":levelOf(inh,state.config),
+            residual_level:res==null?"minimal":levelOf(res,state.config)};
+  }).sort((a,b)=>(b.residual??-1)-(a.residual??-1));
 }
 function periods(){return Object.keys(state.data).sort();}
 
 function badge(lv){return `<span class="badge b-${lv}">${LEVEL_LABELS[lv]}</span>`;}
 
 function renderCards(rows){
-  const n=rows.length, avg=n?r2(rows.reduce((s,a)=>s+a.residual,0)/n):0;
+  const scored=rows.filter(a=>a.residual!=null);
+  const n=rows.length, avg=scored.length?r2(scored.reduce((s,a)=>s+a.residual,0)/scored.length):0;
   const ne=rows.filter(a=>a.residual_level==="extreme").length;
   const nh=rows.filter(a=>a.residual_level==="high").length;
   $("cards").innerHTML=[
@@ -320,13 +395,29 @@ function renderCards(rows){
   ].map(([l,v,c])=>`<div class="card ${c}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
 }
 
-const OFFS=[[0,0],[-.22,.18],[.22,.18],[-.22,-.18],[.22,-.18],[0,.32],[0,-.32]];
+function cellOffsets(count){
+  count=Math.max(0,Math.floor(Number(count)||0));
+  if(!count)return [];
+  const columns=Math.min(3,Math.ceil(Math.sqrt(count))), rows=Math.ceil(count/columns);
+  const xStep=columns===1?0:Math.min(.34,.8/(columns-1));
+  const yStep=rows===1?0:Math.min(.34,.8/(rows-1));
+  const xStart=-xStep*(columns-1)/2, yStart=yStep*(rows-1)/2, positions=[];
+  for(let index=0;index<count;index++){
+    positions.push([+(xStart+(index%columns)*xStep).toFixed(6),
+                    +(yStart-Math.floor(index/columns)*yStep).toFixed(6)]);
+  }
+  return positions;
+}
+function impactCell(value){
+  return Math.floor(Number(value)+.5);
+}
 function bandFill(li,ii){
   const v=li*ii,t=state.config.thresholds;
   return v>=t.extreme?LEVEL_COLORS.extreme:v>=t.high?LEVEL_COLORS.high:
          v>=t.medium?LEVEL_COLORS.medium:v>=t.low?LEVEL_COLORS.low:LEVEL_COLORS.minimal;
 }
 function drawHeat(elId,rows,mode){
+  rows=rows.filter(a=>a.impact!=null);
   const W=560,H=532,ML=64,MT=18,MS=56;
   const cw=(W-ML-14)/5, chh=(H-MT-MS)/5;
   let s=`<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">`;
@@ -336,14 +427,15 @@ function drawHeat(elId,rows,mode){
     s+=`<text x="${x+4}" y="${y+chh-5}" font-size="9" fill="#00000055">${li*ii}</text>`;
   }
   const cells={};
-  rows.forEach(a=>{const k=a.likelihood+","+Math.round(a.impact);(cells[k]=cells[k]||[]).push(a);});
+  rows.forEach(a=>{const k=a.likelihood+","+impactCell(a.impact);(cells[k]=cells[k]||[]).push(a);});
   for(const k in cells){
     const[li,ii]=k.split(",").map(Number);
-    cells[k].forEach((a,n)=>{
-      const[dx,dy]=OFFS[n%OFFS.length];
-      const cx=ML+(a.impact+dx-.5)*cw+7, cy=MT+(5-(a.likelihood+dy)+.5)*chh-4;
+    const items=cells[k], positions=cellOffsets(items.length);
+    items.forEach((a,n)=>{
+      const[dx,dy]=positions[n];
+      const cx=ML+(ii+dx-.5)*cw, cy=MT+(5-(li+dy)+.5)*chh;
       const lv=a[mode+"_level"];
-      const tip=`${a.risk_id} ${a.name}\n可能性${a.likelihood} · 影响${a.impact}\n固有${a.inherent} → 剩余${a.residual}${a.weakest?("（关键控制最弱 "+a.weakest+"）"):"（无控制点）"}\n等级：${LEVEL_LABELS[lv]}${a.recovery!=null?`　挽回率 ${(a.recovery*100).toFixed(0)}%`:""}`;
+      const tip=`${a.risk_id} ${a.name}\n可能性 ${a.likelihood} · 精确影响 ${a.impact.toFixed(2)} / 影响档 ${ii}\n固有${a.inherent} → 剩余${a.residual}${a.weakest?("（关键控制最弱 "+a.weakest+"）"):"（无控制点）"}\n等级：${LEVEL_LABELS[lv]}${a.recovery!=null?`　挽回率 ${(a.recovery*100).toFixed(0)}%`:""}`;
       s+=`<g onclick="showDetail('${a.risk_id}')" style="cursor:pointer"><title>${esc(tip)}</title><circle cx="${cx}" cy="${cy}" r="15" fill="${LEVEL_COLORS[lv]}" stroke="#fff" stroke-width="1.5"/>`+
          `<text x="${cx}" y="${cy+3.5}" font-size="8.5" fill="#fff" text-anchor="middle" font-weight="bold">${a.risk_id}</text></g>`;
     });
@@ -353,7 +445,7 @@ function drawHeat(elId,rows,mode){
     s+=`<text x="${ML+(i-.5)*cw}" y="${H-MS+36}" font-size="9" text-anchor="middle" fill="#9CA3AF">${["轻微","较小","中等","较大","重大"][i-1]}</text>`;
     s+=`<text x="${ML-10}" y="${MT+(5-i+.5)*chh}" font-size="10" text-anchor="end" fill="#6B7280">${i} ${["极低","低","中","高","极高"][i-1]}</text>`;
   }
-  s+=`<text x="${ML+(W-ML)/2}" y="${H-8}" font-size="11" text-anchor="middle" fill="#374151">综合影响（五维加权）</text>`;
+  s+=`<text x="${ML+(W-ML)/2}" y="${H-8}" font-size="11" text-anchor="middle" fill="#374151">综合影响档（四舍五入）</text>`;
   s+=`<text x="16" y="${MT+(H-MT-MS)/2}" font-size="11" text-anchor="middle" fill="#374151" transform="rotate(-90 16 ${MT+(H-MT-MS)/2})">发生可能性</text>`;
   s+="</svg>";
   $(elId).innerHTML=s;
@@ -365,9 +457,10 @@ function renderTrend(base,cmp){
     panel.style.display="none";return;
   }
   panel.style.display="";
-  const A=assess(base), B=assess(cmp);
+  const A=assess(base).filter(a=>a.residual!=null), B=assess(cmp).filter(a=>a.residual!=null);
   const prev=Object.fromEntries(B.map(a=>[a.risk_id,a]));
-  const deltas=A.map(a=>({a,prev:prev[a.risk_id]?.residual??null,d:prev[a.risk_id]?r2(a.residual-prev[a.risk_id].residual):null}))
+  const deltas=A.map(a=>({a,prev:(prev[a.risk_id]&&prev[a.risk_id].residual!=null)?prev[a.risk_id].residual:null,
+                          d:(prev[a.risk_id]&&prev[a.risk_id].residual!=null&&a.residual!=null)?r2(a.residual-prev[a.risk_id].residual):null}))
                 .filter(x=>x.d!==null).sort((x,y)=>Math.abs(y.d)-Math.abs(x.d));
   const show=deltas.slice(0,12).reverse();
   const W=1100,rh=30,H=show.length*rh+70,L=250,R=80;
@@ -405,12 +498,12 @@ function renderTrend(base,cmp){
 
 function renderPriority(rows,period){
   $("tbl-prio").innerHTML=`<thead><tr><th>排名</th><th>编号</th><th>风险名称</th><th>领域</th><th>责任部门</th><th class="num">可能性</th><th class="num">综合影响</th><th class="num">固有</th><th class="num">最弱控制</th><th class="num">剩余</th><th class="num">挽回率</th><th>等级</th><th>建议频次</th></tr></thead><tbody>`+
-    rows.map((a,i)=>`<tr style="cursor:pointer" onclick="showDetail('${a.risk_id}')"><td>${i+1}</td><td>${a.risk_id}</td><td>${esc(a.name)}</td><td>${esc(a.domain)}</td><td>${esc(a.owner_dept)}</td><td class="num">${a.likelihood}</td><td class="num">${a.impact.toFixed(2)}</td><td class="num">${a.inherent.toFixed(2)}</td><td class="num">${a.weakest??"—"}</td><td class="num"><b>${a.residual.toFixed(2)}</b></td><td class="num">${a.recovery==null?"—":(a.recovery*100).toFixed(0)+"%"}</td><td>${badge(a.residual_level)}</td><td>${FREQ[a.residual_level]}</td></tr>`).join("")+"</tbody>";
+    rows.map((a,i)=>`<tr style="cursor:pointer" onclick="showDetail('${a.risk_id}')"><td>${i+1}</td><td>${a.risk_id}</td><td>${esc(a.name)}</td><td>${esc(a.domain)}</td><td>${esc(a.owner_dept)}</td><td class="num">${a.likelihood}</td><td class="num">${a.impact==null?"—":a.impact.toFixed(2)}</td><td class="num">${a.inherent==null?"—":a.inherent.toFixed(2)}</td><td class="num">${a.weakest??"—"}</td><td class="num"><b>${a.residual==null?"—":a.residual.toFixed(2)}</b></td><td class="num">${a.recovery==null?"—":(a.recovery*100).toFixed(0)+"%"}</td><td>${badge(a.residual_level)}</td><td>${FREQ[a.residual_level]}</td></tr>`).join("")+"</tbody>";
 }
 
 function renderEditor(rows,period){
   $("tbl-risks").innerHTML=`<thead><tr><th>编号</th><th>名称</th><th>领域</th><th class="num">剩余</th><th>等级</th><th>操作</th></tr></thead><tbody>`+
-    rows.map(a=>`<tr><td>${a.risk_id}</td><td>${esc(a.name)}</td><td>${esc(a.domain)}</td><td class="num">${a.residual.toFixed(2)}</td><td>${badge(a.residual_level)}</td>`+
+    rows.map(a=>`<tr><td>${a.risk_id}</td><td>${esc(a.name)}</td><td>${esc(a.domain)}</td><td class="num">${a.residual==null?"—":a.residual.toFixed(2)}</td><td>${badge(a.residual_level)}</td>`+
       `<td><button class="btn sm" onclick="editRisk('${a.risk_id}')">编辑</button> <button class="btn sm danger" onclick="delRisk('${a.risk_id}')">删除</button></td></tr>`).join("")+"</tbody>";
   const sel=$("sel-ctrl-risk");
   const cur=sel.value;
@@ -434,7 +527,7 @@ function renderSettings(){
   w.innerHTML=DIMS.map(d=>`<div class="frow"><label>${DIM_LABELS[d]}</label><input type="number" step="0.05" min="0" max="1" value="${state.config.weights[d]}" data-w="${d}" onchange="setWeight('${d}',this.value)"></div>`).join("");
   const t=state.config.thresholds;
   $("t-extreme").value=t.extreme;$("t-high").value=t.high;$("t-medium").value=t.medium;$("t-low").value=t.low;
-  $("f-floor").value=state.config.impact_floor??.75;
+  $("f-floor").value=state.config.impact_floor_factor??.75;
   $("r-rows").innerHTML=[1,2,3,4,5].map(s=>`<label style="min-width:auto">分${s}</label><input type="number" step="0.05" min="0" max="0.95" style="width:80px" value="${state.config.reduction_map[String(s)]}" onchange="setReduction(${s},this.value)">`).join("");
   updateWsum();
   renderDW();
@@ -461,7 +554,7 @@ function setDW(name,dim,v){
   row[dim]=+v||0;persist();renderDW();renderAll();
 }
 function setFloor(v){
-  state.config.impact_floor=Math.min(1,Math.max(0,+v||0));
+  state.config.impact_floor_factor=Math.min(1,Math.max(0,+v||0));
   persist();renderAll();
 }
 function updateWsum(){
@@ -510,13 +603,17 @@ function renderAll(){
 function persist(){try{localStorage.setItem(LS_KEY,JSON.stringify(state));}catch(e){}}
 function boot(){
   const saved=localStorage.getItem(LS_KEY);
-  if(saved){try{state=JSON.parse(saved);}catch(e){}}
+  if(saved){try{
+    const restored=JSON.parse(saved);
+    state={...state,...restored,config:normalizeConfig(restored.config)};
+  }catch(e){state.config=normalizeConfig(state.config);}}
+  else state.config=normalizeConfig(state.config);
   if(!periods().length&&window.SAMPLE_DATA) loadSample();
   renderSettings();renderAnchors();renderAll();
 }
 function loadSample(){
   if(!window.SAMPLE_DATA){alert("未找到内置示例数据（sample_data.js）");return;}
-  state.config=JSON.parse(JSON.stringify(SAMPLE_DATA.config));
+  state.config=normalizeConfig(SAMPLE_DATA.config);
   state.data=JSON.parse(JSON.stringify(SAMPLE_DATA.periods));
   const ps=periods();
   state.active=ps[ps.length-1];state.compare=ps.length>1?ps[ps.length-2]:null;
@@ -537,13 +634,14 @@ function importCSV(file,kind){
       if(!state.data[p]) state.data[p]={risks:[],controls:[]};
       const num=(v,d)=>{const n=parseInt(v,10);return isNaN(n)?d:n;};
       if(kind==="risks"){
-        state.data[p].risks=byPeriod[p].map(r=>({
-          risk_id:r.risk_id,name:r.name,domain:r.domain||"未分类",
-          description:r.description||"",owner_dept:r.owner_dept||"",
-          rationale:r.rationale||"",
-          period:p,likelihood:num(r.likelihood,3),
-          ...Object.fromEntries(DIMS.map(d=>[d,num(r[d],3)]))
-        }));
+        state.data[p].risks=byPeriod[p].map(r=>{
+          const dv=v=>{const t=String(v??"").trim();if(t==="")return null;const n=parseInt(t,10);return isNaN(n)?null:n;};
+          return {risk_id:r.risk_id,name:r.name,domain:r.domain||"未分类",
+            description:r.description||"",owner_dept:r.owner_dept||"",
+            rationale:r.rationale||"",
+            period:p,likelihood:num(r.likelihood,3),
+            ...Object.fromEntries(DIMS.map(d=>[d,dv(r[d])]))};
+        });
       }else{
         const kept=state.data[p].controls.filter(c=>!byPeriod[p].some(r=>r.control_id===c.control_id));
         state.data[p].controls=kept.concat(byPeriod[p].map(c=>{
@@ -563,14 +661,7 @@ function importConfig(file){
   rd.onload=()=>{
     try{
       const j=JSON.parse(rd.result);
-      for(const k of ["weights","reduction_map","thresholds"])
-        Object.assign(state.config[k],j[k]||{});
-      if(j.domain_weights){
-        state.config.domain_weights={...(state.config.domain_weights||{}),...j.domain_weights};
-        for(const dom in j.domain_weights)
-          state.config.domain_weights[dom]={...(state.config.domain_weights[dom]||state.config.weights),...j.domain_weights[dom]};
-      }
-      if(j.impact_floor!=null)state.config.impact_floor=+j.impact_floor;
+      state.config=normalizeConfig(j);
       persist();renderSettings();renderAll();
     }catch(e){alert("config.json 解析失败："+e.message);}
   };
@@ -611,9 +702,14 @@ function saveRisk(){
   const id=$("f-id").value.trim()||nextRiskId();
   const name=$("f-name").value.trim();
   if(!name){$("f-msg").textContent="请填写风险名称";return;}
-  const lik=+$("f-lik").value, dims=$$(".f-dim").map(i=>+i.value);
-  const vals=[lik,...dims];
-  if(vals.some(v=>!(v>=1&&v<=5))){$("f-msg").textContent="所有打分须为 1~5";return;}
+  const lik=+$("f-lik").value;
+  const dims=$$(".f-dim").map(i=>{
+    const t=i.value.trim();
+    return t===""?null:+t;
+  });
+  if(!(lik>=1&&lik<=5)){$("f-msg").textContent="可能性须为 1~5";return;}
+  if(dims.some(v=>v!==null&&!(v>=1&&v<=5))){$("f-msg").textContent="已填维度须为 1~5（不适用请留空）";return;}
+  if(!dims.some(v=>v!==null)){$("f-msg").textContent="至少为一个影响维度打分";return;}
   const rec={risk_id:id,name,domain:$("f-domain").value,description:$("f-desc").value.trim(),
              owner_dept:$("f-dept").value.trim(),period:state.active,
              rationale:$("f-basis").value.trim(),
@@ -630,7 +726,7 @@ function saveRisk(){
 function clearRiskForm(){
   ["f-name","f-desc","f-dept","f-basis"].forEach(i=>$(i).value="");
   $("f-id").value="";$("f-lik").value=3;
-  $$(".f-dim").forEach(i=>i.value=3);
+  $$(".f-dim").forEach(i=>i.value="");
   $("f-msg").textContent="";
 }
 function editRisk(rid){
@@ -642,7 +738,7 @@ function editRisk(rid){
   $("f-desc").value=r.description;$("f-dept").value=r.owner_dept;
   $("f-basis").value=r.rationale||"";
   $("f-lik").value=r.likelihood;
-  $$(".f-dim").forEach((i,ix)=>i.value=r[DIMS[ix]]);
+  $$(".f-dim").forEach((i,ix)=>i.value=(r[DIMS[ix]]==null?"":r[DIMS[ix]]));
   $("f-msg").textContent="正在编辑 "+rid;
   window.scrollTo({top:$("tbl-risks").closest(".panel").offsetTop-20,behavior:"smooth"});
 }
@@ -709,12 +805,12 @@ function showDetail(rid){
       <span>风险描述</span><span>${esc(a.description)||"—"}</span>
       <span>打分依据</span><span>${esc(a.rationale)||"—"}</span>
       <span>发生可能性</span><span>${a.likelihood}（${["极低","低","中","高","极高"][a.likelihood-1]}）</span>
-      ${DIMS.map(dd=>`<span>${DIM_LABELS[dd]}</span><span>${a[dd]}</span>`).join("")}
-      <span>综合影响</span><b>${a.impact.toFixed(2)}</b>
-      <span>固有风险</span><b>${a.inherent.toFixed(2)}（${LEVEL_LABELS[a.inherent_level]}）</b>
+      ${DIMS.map(dd=>`<span>${DIM_LABELS[dd]}</span><span>${a[dd]==null?"<i style='color:#9CA3AF'>不适用</i>":a[dd]}</span>`).join("")}
+      <span>综合影响</span><b>${a.impact==null?"—":a.impact.toFixed(2)}</b>
+      <span>固有风险</span><b>${a.inherent==null?"—":a.inherent.toFixed(2)+"（"+LEVEL_LABELS[a.inherent_level]+"）"}</b>
       <span>关键最弱控制</span><span>${a.weakest??("无控制点")}</span>
       <span>折减系数</span><span>${(a.reduction*100).toFixed(0)}%</span>
-      <span>剩余风险</span><b>${a.residual.toFixed(2)} ${badge(a.residual_level)}</b>
+      <span>剩余风险</span><b>${a.residual==null?"—":a.residual.toFixed(2)+" "+badge(a.residual_level)}</b>
       <span>控制挽回率</span><span>${a.recovery==null?"—":(a.recovery*100).toFixed(0)+"%"}</span>
     </div>
     <h4>控制点（${ctrls.length}）</h4>
@@ -755,6 +851,21 @@ const ANCHORS = [
     ["3","诱因集中；潜在损失 100~500 万元","ACFE：75 分位 $75 万"],
     ["4","诱因高危或有案例；潜在损失 500~5000 万元","国资委较大~重大档"],
     ["5","系统性舞弊土壤；潜在损失 ≥5000 万或 ≥年营收 5%","ACFE：年均 5% 营收"]]],
+  ["战略影响（COSO ERM + 央企指引战略风险）", [["1","对战略目标无偏离影响","COSO ERM 2017"],
+    ["2","影响单项年度 KPI，可内部消化","COSO ERM 战略类"],
+    ["3","影响年度重点战略举措推进","央企指引战略风险"],
+    ["4","影响三年规划目标或主营业务布局","COSO：战略与绩效"],
+    ["5","颠覆战略目标/主营业务模式重构","央企指引：战略风险重大"]]],
+  ["数据安全（数安法分级 + ISO 27001 CIA）", [["1","不涉及敏感数据","ISO 27001"],
+    ["2","少量内部非敏数据受损，可恢复","网数条例第 57 条"],
+    ["3","一般个人信息或商业数据泄露（<10 万条）","个保法第 66 条第一款"],
+    ["4","大量个人信息/重要数据泄露或出境违规","个保法顶格；数安法第 45 条"],
+    ["5","重要数据泄露危害国家安全/公共安全","数安法：重大违规"]]],
+  ["健康安全（ISO 45001 + 安全生产法 + 493 号令）", [["1","无人员伤害可能","ISO 45001"],
+    ["2","轻微伤风险，职业健康隐患","ISO 45001"],
+    ["3","重伤风险；一般事故苗头（<3 人死亡）","493 号令一般事故"],
+    ["4","死亡 3~30 人或重伤 10~100 人量级","493 号令较大/重大事故"],
+    ["5","群死群伤（≥30 人死亡）或特别重大事故","493 号令特别重大"]]],
 ];
 function renderAnchors(){
   $("tbl-anchor").innerHTML = ANCHORS.map(([title, rows]) =>
