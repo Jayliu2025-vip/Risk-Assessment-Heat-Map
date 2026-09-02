@@ -90,3 +90,7 @@ python -m unittest discover -s tests  # 24 项评分模型测试 + 发布一致�
 - 调整领域清单：改 `tools/common.py` 的 `DOMAINS` + Excel C 列数据验证 + 网页 `DOMAINS` 常量。
 - 增减影响维度：`common.py` 的 `DIMS`/`DIM_LABELS`、Excel 参数配置权重区与登记册公式、网页 `DIMS`。
 - 换行业适配：替换 `tools/sample_data.py` 的风险清单即可，模型无需改动。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
