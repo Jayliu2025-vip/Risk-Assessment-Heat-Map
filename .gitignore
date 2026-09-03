@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.venv-desktop/
+build/
+dist/
+installer-output/
 .worktrees/
 
 # 编辑器 / 工具

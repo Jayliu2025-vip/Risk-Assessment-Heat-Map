@@ -123,6 +123,14 @@ class DesktopStore:
         finally:
             connection.close()
 
+    def list_tasks(self) -> list[AnalysisTask]:
+        connection = self._connect()
+        try:
+            rows = connection.execute("SELECT task_id, file_name, file_hash, created_at, status, model_profile, extraction_method FROM analysis_tasks ORDER BY created_at DESC, task_id DESC").fetchall()
+            return [self._row_task(row) for row in rows]
+        finally:
+            connection.close()
+
     def save_findings(self, findings: Iterable[FindingDraft]) -> list[FindingDraft]:
         checked = [FindingDraft(**asdict(finding)) for finding in findings]
         columns = ", ".join(_FINDING_COLUMNS)
@@ -191,6 +199,35 @@ class DesktopStore:
         finally:
             connection.close()
         return checked
+
+    def apply_finding_review_transaction(self, task_id: str, updates: Iterable[FindingDraft], additions: Iterable[FindingDraft]) -> list[FindingDraft]:
+        """Atomically apply reviewed existing findings and newly split drafts."""
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValidationError("task_id不能为空")
+        checked_updates = [FindingDraft(**asdict(item)) for item in updates]
+        checked_additions = [FindingDraft(**asdict(item)) for item in additions]
+        all_items = checked_updates + checked_additions
+        if any(item.task_id != task_id for item in all_items):
+            raise ValidationError("finding task_id必须与任务一致")
+        ids = [item.finding_id for item in all_items]
+        if len(ids) != len(set(ids)):
+            raise ValidationError("finding_id不得重复")
+        existing = {item.finding_id for item in self.list_findings(task_id)}
+        if any(item.finding_id not in existing for item in checked_updates):
+            raise KeyError("finding not found")
+        if any(item.finding_id in existing for item in checked_additions):
+            raise ValidationError("拆分finding_id已存在")
+        columns = ", ".join(_FINDING_COLUMNS)
+        placeholders = ", ".join("?" for _ in _FINDING_COLUMNS)
+        assignments = ", ".join(f"{column}=excluded.{column}" for column in _FINDING_COLUMNS if column not in {"task_id", "finding_id"})
+        connection = self._connect()
+        try:
+            with connection:
+                for item in all_items:
+                    connection.execute(f"INSERT INTO findings ({columns}) VALUES ({placeholders}) ON CONFLICT(task_id, finding_id) DO UPDATE SET {assignments}", self._finding_values(item))
+        finally:
+            connection.close()
+        return all_items
 
     def set_review_status(self, task_id: str, finding_id: str, review_status: str) -> FindingDraft:
         if review_status not in ("待确认", "已接受", "已排除"):

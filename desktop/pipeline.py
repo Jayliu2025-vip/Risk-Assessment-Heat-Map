@@ -285,6 +285,15 @@ class AnalysisPipeline:
             self._cancel_failure_locked(task_id)
             return True
 
+    def cleanup_task(self, task_id: str) -> None:
+        """Discard only finished task runtime/cache files, never persisted history or source."""
+        with self._lock:
+            runtime = self._runtime.get(task_id)
+            if runtime is not None and runtime.future is not None and not runtime.future.done():
+                raise ValueError("任务仍在运行，无法清理")
+            self._runtime.pop(task_id, None)
+        self._cleanup(task_id)
+
     def _fail(self, task_id: str, exc: Exception, fallback: str, message: str) -> None:
         """Best-effort terminal failure that cannot race an accepted cancel."""
         code = self._code(getattr(exc, "code", None), fallback)

@@ -225,6 +225,15 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(len(self.store.list_findings(task.task_id)), 3)
         self.assertEqual(len(model.seen_images), 1)
         self.assertFalse(self.tasks.task_dir(task.task_id).exists())
+
+    def test_cleanup_task_forgets_only_runtime_state_and_preserves_history_and_source(self) -> None:
+        pipeline, _, _ = self.pipeline()
+        task = pipeline.start(self.source, "synthetic")
+        pipeline.wait(task.task_id, 2)
+        pipeline.cleanup_task(task.task_id)
+        self.assertIsNone(pipeline._runtime.get(task.task_id))
+        self.assertEqual(self.store.get_task(task.task_id).task_id, task.task_id)
+        self.assertTrue(self.source.is_file())
         self.assertEqual(self.store.write_threads[0], threading.get_ident())
         self.assertTrue(any(thread != threading.get_ident() for thread in self.store.write_threads[1:]))
 
