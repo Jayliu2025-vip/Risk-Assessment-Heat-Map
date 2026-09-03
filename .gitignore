@@ -17,6 +17,8 @@ Thumbs.db
 
 # 本地验收 / 外部工具运行产物
 .playwright-cli/
+/node_modules/
+/test-results/
 /logs/
 /output/playwright/
 /tmp/

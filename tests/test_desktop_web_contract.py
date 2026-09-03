@@ -58,6 +58,11 @@ class DesktopWebContractTests(unittest.TestCase):
         self.assertIn("channel: 'chrome'", config)
         self.assertIn("headless: true", config)
 
+    def test_local_browser_dependencies_and_results_are_ignored(self) -> None:
+        ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn("/node_modules/", ignored)
+        self.assertIn("/test-results/", ignored)
+
 
 if __name__ == "__main__":
     unittest.main()
