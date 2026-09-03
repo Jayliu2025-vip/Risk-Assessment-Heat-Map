@@ -1,0 +1,63 @@
+"""Static contract for the synthetic-only desktop report review surface."""
+
+from __future__ import annotations
+
+import json
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class DesktopWebContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.html = (ROOT / "web" / "risk_heatmap.html").read_text(encoding="utf-8")
+        self.script = (ROOT / "web" / "desktop_report.js").read_text(encoding="utf-8")
+        self.css = (ROOT / "web" / "desktop_report.css").read_text(encoding="utf-8")
+
+    def test_desktop_surface_is_hidden_until_the_webview_event(self) -> None:
+        for element_id in (
+            "desktop-report-nav", "report-step-upload", "report-step-extract",
+            "report-step-review", "report-step-commit", "report-source-viewer",
+            "report-finding-form", "report-change-preview",
+        ):
+            self.assertIn(f'id="{element_id}"', self.html)
+        self.assertIn("desktop-report-shell[hidden]", self.css)
+        self.assertIn("pywebviewready", self.script)
+        self.assertIn("window.pywebview.api", self.script)
+        self.assertIn("addEventListener(\"pywebviewready\"", self.script)
+
+    def test_review_form_has_only_the_approved_fields(self) -> None:
+        approved = (
+            "title", "fact_summary", "source_page", "source_excerpt", "matched_risk_id",
+            "domain", "likelihood", "imp_financial", "imp_compliance", "imp_operation",
+            "imp_reputation", "imp_fraud", "imp_strategy", "imp_data", "imp_hse",
+            "rationale", "needs_review", "review_status",
+        )
+        for name in approved:
+            self.assertIn(f'data-finding-field="{name}"', self.html)
+        for banned in ("unit", "amount", "ocr_confidence", "model_confidence", "dimension_evidence"):
+            self.assertNotIn(f'data-finding-field="{banned}"', self.html)
+
+    def test_load_hook_validates_and_replaces_one_period_atomically(self) -> None:
+        self.assertIn("window.RAHMDesktop.loadPeriodData", self.html)
+        for marker in ("SAFE_PERIOD", "isDesktopRisk", "isDesktopControl", "nextData", "persist();renderAll();"):
+            self.assertIn(marker, self.html)
+        self.assertIn('<script src="desktop_report.js"></script>', self.html)
+        self.assertIn('<link rel="stylesheet" href="desktop_report.css">', self.html)
+        self.assertIn('const APP_VERSION = "1.2";', self.html)
+
+    def test_playwright_package_contract_is_pinned(self) -> None:
+        package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+        self.assertTrue(package["private"])
+        self.assertEqual(package["scripts"], {"test:e2e": "playwright test"})
+        self.assertEqual(package["devDependencies"], {"@playwright/test": "1.55.0"})
+        config = (ROOT / "playwright.config.js").read_text(encoding="utf-8")
+        self.assertIn("defineConfig", config)
+        self.assertIn("channel: 'chrome'", config)
+        self.assertIn("headless: true", config)
+
+
+if __name__ == "__main__":
+    unittest.main()

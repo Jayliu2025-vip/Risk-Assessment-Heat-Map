@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>审计风险评估热力图谱</title>
+<link rel="stylesheet" href="desktop_report.css">
 <style>
 :root{
   --extreme:#C00000;--high:#ED7D31;--medium:#FFC000;--low:#8EAADB;--minimal:#70AD47;
@@ -96,8 +97,77 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
     <select id="sel-compare"></select>
     <button id="btn-sample" class="no-print">载入内置示例</button>
     <button id="btn-print">打印 / 存 PDF</button>
+    <button id="desktop-report-nav" hidden>桌面报告复核</button>
   </div>
 </header>
+<section id="desktop-report-shell" hidden aria-label="桌面报告复核工作流">
+  <div class="desktop-report">
+    <h2>审计报告复核与风险评估</h2>
+    <p class="note">模型输出仅供审计判断参考；历史发现不证明当前剩余风险。</p>
+    <nav class="report-steps" aria-label="报告处理步骤">
+      <span id="report-tab-upload" class="report-step" aria-current="step">1 上传报告</span>
+      <span id="report-tab-extract" class="report-step" aria-current="false">2 本地提取</span>
+      <span id="report-tab-review" class="report-step" aria-current="false">3 复核审计发现</span>
+      <span id="report-tab-commit" class="report-step" aria-current="false">4 进入风险评估</span>
+    </nav>
+    <div id="report-status" class="report-status" aria-live="polite"></div>
+
+    <section id="report-step-upload">
+      <h3>上传报告</h3>
+      <div class="toolbar"><button class="btn primary" id="report-choose">选择报告</button><span id="report-file-name" class="note">尚未选择</span></div>
+      <div class="frow"><label for="report-period">评估期间</label><input id="report-period" type="text" placeholder="例如 2026H2" autocomplete="off"><label for="report-model-profile">已保存模型</label><select id="report-model-profile"></select></div>
+      <p id="report-model-summary" class="note"></p>
+      <details><summary>模型设置</summary>
+        <div class="report-form" style="margin-top:8px">
+          <label>名称<input id="model-name" type="text"></label><label>Base URL<input id="model-base-url" type="url"></label>
+          <label>模型<input id="model-model" type="text"></label><label>API Key<input id="model-api-key" type="password" autocomplete="new-password"></label>
+          <label><span>支持视觉</span><input id="model-supports-vision" type="checkbox"></label>
+        </div>
+        <div class="toolbar" style="margin-top:8px"><button class="btn" id="model-save" type="button">保存模型设置</button><button class="btn" id="model-test" type="button">测试连接</button></div>
+      </details>
+      <div class="toolbar" style="margin-top:12px"><button class="btn primary" id="report-start" type="button">开始本地提取</button></div>
+    </section>
+
+    <section id="report-step-extract" hidden>
+      <h3>本地提取</h3><p id="report-extraction-method" class="note">等待开始。</p><button class="btn" type="button" onclick="document.getElementById('report-step-upload').hidden=false">重新选择报告</button>
+    </section>
+
+    <section id="report-step-review" hidden>
+      <h3>复核审计发现</h3>
+      <div class="report-grid">
+        <div><div id="report-findings" class="report-findings" aria-label="发现列表"></div><h3>来源页面与摘录</h3><div id="report-source-viewer" class="report-source" tabindex="0">请选择一项发现。</div></div>
+        <div>
+          <form id="report-finding-form" class="report-form" aria-label="审计发现复核表单" onsubmit="return false">
+            <label class="span2">标题<input data-finding-field="title" type="text"></label>
+            <label class="span2">事实摘要<textarea data-finding-field="fact_summary"></textarea></label>
+            <label>来源页<input data-finding-field="source_page" type="text"></label><label>匹配风险 ID<input data-finding-field="matched_risk_id" type="text"></label>
+            <label class="span2">来源摘录<textarea data-finding-field="source_excerpt"></textarea></label>
+            <label>领域<select data-finding-field="domain"><option>采购与外包</option><option>资金活动</option><option>信息系统</option></select></label><label>可能性<input data-finding-field="likelihood" type="number" min="1" max="5"></label>
+            <div class="span2 report-dims">
+              <label>经济损失<input data-finding-field="imp_financial" type="number" min="1" max="5"></label><label>合规法律<input data-finding-field="imp_compliance" type="number" min="1" max="5"></label>
+              <label>运营中断<input data-finding-field="imp_operation" type="number" min="1" max="5"></label><label>声誉舆情<input data-finding-field="imp_reputation" type="number" min="1" max="5"></label>
+              <label>舞弊风险<input data-finding-field="imp_fraud" type="number" min="1" max="5"></label><label>战略影响<input data-finding-field="imp_strategy" type="number" min="1" max="5"></label>
+              <label>数据安全<input data-finding-field="imp_data" type="number" min="1" max="5"></label><label>健康安全<input data-finding-field="imp_hse" type="number" min="1" max="5"></label>
+            </div>
+            <label class="span2">判断依据<textarea data-finding-field="rationale"></textarea></label>
+            <label>需人工复核<input data-finding-field="needs_review" type="checkbox"></label><label>复核状态<select data-finding-field="review_status"><option>待确认</option><option>已接受</option><option>已排除</option></select></label>
+          </form>
+          <div class="toolbar" style="margin-top:10px"><button class="btn primary" id="report-save" type="button">保存发现</button><button class="btn" id="report-accept" type="button">接受</button><button class="btn" id="report-exclude" type="button">排除</button><button class="btn" id="report-merge" type="button">合并所选</button><button class="btn" id="report-split" type="button">拆分</button></div>
+        </div>
+      </div>
+      <div class="toolbar" style="margin-top:12px"><button class="btn primary" id="report-to-commit" type="button">进入风险评估</button></div>
+    </section>
+
+    <section id="report-step-commit" hidden>
+      <h3>进入风险评估</h3>
+      <p class="note">请先确认当前控制措施；确认前不会展示当前剩余风险或提交入口。</p>
+      <label class="report-confirm"><input id="report-controls-confirmed" type="checkbox"> 已确认当前控制措施</label>
+      <div class="toolbar"><button class="btn primary" id="report-preview" type="button">选择工作簿并预览</button></div>
+      <div id="report-change-preview" class="report-preview" hidden><h3>变更预览</h3><ul id="report-preview-list"></ul><button class="btn primary" id="report-commit" type="button">提交到工作簿</button></div>
+    </section>
+  </div>
+</section>
+<div id="desktop-output" class="note" aria-live="polite"><span id="report-output-path"></span></div>
 <div id="print-head">
   <h1>内部审计风险评估热力图谱</h1>
   <div class="p" id="print-period"></div>
@@ -852,7 +922,16 @@ $("sel-ctrl-risk").addEventListener("change",renderCtrlTable);
 });
 $("f-floor").addEventListener("change",e=>setFloor(e.target.value));
 
+const SAFE_PERIOD=/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+const safeText=value=>typeof value==="string"&&value.length<=5000;
+const safeId=value=>typeof value==="string"&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
+function isDesktopRisk(row,period){return row&&typeof row==="object"&&!Array.isArray(row)&&safeId(row.risk_id)&&safeText(row.name)&&safeText(row.domain)&&safeText(row.description)&&safeText(row.owner_dept)&&safeText(row.rationale)&&row.period===period&&Number.isInteger(row.likelihood)&&row.likelihood>=1&&row.likelihood<=5&&DIMS.every(dim=>row[dim]===null||(Number.isInteger(row[dim])&&row[dim]>=1&&row[dim]<=5));}
+function isDesktopControl(row,period){return row&&typeof row==="object"&&!Array.isArray(row)&&safeId(row.control_id)&&safeId(row.risk_id)&&safeText(row.description)&&row.period===period&&Number.isInteger(row.score)&&row.score>=1&&row.score<=5&&(row.key==="是"||row.key==="否");}
+window.RAHMDesktop=window.RAHMDesktop||{};
+window.RAHMDesktop.loadPeriodData=function(period,risks,controls){if(typeof period!=="string"||!SAFE_PERIOD.test(period)||!Array.isArray(risks)||!Array.isArray(controls)||!risks.every(row=>isDesktopRisk(row,period))||!controls.every(row=>isDesktopControl(row,period)))return false;const nextData={...state.data,[period]:{risks:JSON.parse(JSON.stringify(risks)),controls:JSON.parse(JSON.stringify(controls))}};state.data=nextData;state.active=period;persist();renderAll();return true;};
+window.__RAHMDesktopTestState=()=>state;
 boot();
 </script>
+<script src="desktop_report.js"></script>
 </body>
 </html>
