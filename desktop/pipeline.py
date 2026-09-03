@@ -292,7 +292,10 @@ class AnalysisPipeline:
             if runtime is not None and runtime.future is not None and not runtime.future.done():
                 raise ValueError("任务仍在运行，无法清理")
             self._runtime.pop(task_id, None)
+            self._events.pop(task_id, None)
         self._cleanup(task_id)
+        with self._lock:
+            self._events.pop(task_id, None)
 
     def _fail(self, task_id: str, exc: Exception, fallback: str, message: str) -> None:
         """Best-effort terminal failure that cannot race an accepted cancel."""

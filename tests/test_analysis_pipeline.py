@@ -232,8 +232,29 @@ class PipelineTests(unittest.TestCase):
         pipeline.wait(task.task_id, 2)
         pipeline.cleanup_task(task.task_id)
         self.assertIsNone(pipeline._runtime.get(task.task_id))
+        self.assertEqual(pipeline.events(task.task_id), [])
         self.assertEqual(self.store.get_task(task.task_id).task_id, task.task_id)
         self.assertTrue(self.source.is_file())
+
+    def test_cleanup_task_does_not_clear_another_task_runtime_or_events(self) -> None:
+        pipeline, _, _ = self.pipeline()
+        first = pipeline.start(self.source, "synthetic")
+        second = pipeline.start(self.source, "synthetic")
+        pipeline.wait(first.task_id, 2)
+        pipeline.wait(second.task_id, 2)
+        pipeline.cleanup_task(first.task_id)
+        self.assertNotIn(first.task_id, pipeline._runtime)
+        self.assertNotIn(first.task_id, pipeline._events)
+        self.assertIn(second.task_id, pipeline._runtime)
+        self.assertIn(second.task_id, pipeline._events)
+
+    def test_cleanup_task_drops_target_event_cache_even_when_temp_cleanup_has_residue(self) -> None:
+        pipeline, _, _ = self.pipeline()
+        task = pipeline.start(self.source, "synthetic")
+        pipeline.wait(task.task_id, 2)
+        with patch.object(self.tasks, "cleanup", return_value=[self.tasks.task_dir(task.task_id)]):
+            pipeline.cleanup_task(task.task_id)
+        self.assertNotIn(task.task_id, pipeline._events)
         self.assertEqual(self.store.write_threads[0], threading.get_ident())
         self.assertTrue(any(thread != threading.get_ident() for thread in self.store.write_threads[1:]))
 

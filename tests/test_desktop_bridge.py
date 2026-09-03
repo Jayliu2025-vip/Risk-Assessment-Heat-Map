@@ -175,6 +175,34 @@ class DesktopBridgeTests(unittest.TestCase):
         preview = self.bridge.get_source_preview("T-docx", "F-docx")
         self.assertEqual(preview, {"ok": True, "kind": "text", "source_page": "第 2 段", "source_excerpt": "有限摘录"})
 
+    def test_source_preview_reattaches_a_matching_report_after_bridge_restart(self):
+        self.seed_task()
+        restarted = type(self.bridge)(
+            store=self.store, pipeline=Pipeline(self.store), credential_store=CredentialMemory(),
+            model_client_factory=Client, workbook_writer=self.writer,
+            risk_catalog=[{"risk_id": "R001", "name": "合成风险"}],
+            pdf_preview_renderer=lambda path, page: b"png-bytes",
+        )
+        restarted.attach_window(self.window)
+        self.window.selected = [str(self.report)]
+        token = restarted.choose_report("report")["selection_token"]
+        preview = restarted.get_source_preview("T-1", "F-1", token)
+        self.assertEqual(preview["kind"], "pdf")
+        self.assertEqual(restarted._task_sources["T-1"][1], token)
+        wrong = self.root / "other.pdf"; wrong.write_bytes(b"different synthetic report")
+        mismatched = type(self.bridge)(
+            store=self.store, pipeline=Pipeline(self.store), credential_store=CredentialMemory(),
+            model_client_factory=Client, workbook_writer=self.writer,
+            risk_catalog=[{"risk_id": "R001", "name": "合成风险"}],
+            pdf_preview_renderer=lambda path, page: b"png-bytes",
+        )
+        mismatched.attach_window(self.window)
+        self.window.selected = [str(wrong)]
+        wrong_token = mismatched.choose_report("report")["selection_token"]
+        mismatch = mismatched.get_source_preview("T-1", "F-1", wrong_token)
+        self.assertEqual(mismatch["code"], "SOURCE_HASH_CHANGED")
+        self.assertNotIn(str(wrong), str(mismatch))
+
     def test_human_save_merge_and_split_validate_before_atomic_write(self):
         self.seed_task()
         self.store.save_findings([finding("T-1", "F-2")])
@@ -216,6 +244,31 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(self.store.get_task("T-1").task_id, "T-1")
         self.assertTrue(self.report.exists())
         self.assertNotIn("T-1", self.bridge._task_sources)
+
+    def test_cleanup_task_is_scoped_to_its_report_and_workbook_preview(self):
+        second_report = self.root / "second.pdf"; second_report.write_bytes(b"second synthetic report")
+        self.seed_task("T-1", self.report)
+        self.seed_task("T-2", second_report)
+        report_one = self.select(self.report)["selection_token"]
+        report_two = self.select(second_report)["selection_token"]
+        self.bridge._task_sources.update({"T-1": (self.report, report_one), "T-2": (second_report, report_two)})
+        first_book = self.select(self.workbook, "workbook")["selection_token"]
+        second_book_file = self.root / "second.xlsx"; second_book_file.write_bytes(b"second synthetic workbook")
+        second_book = self.select(second_book_file, "workbook")["selection_token"]
+        decision = [{"action": "exclude", "finding_ids": ["F-1"]}]
+        self.bridge.preview_commit("T-1", first_book, decision)
+        self.bridge.preview_commit("T-2", second_book, decision)
+        cleaned = self.bridge.cleanup_task("T-1")
+        self.assertTrue(cleaned["ok"])
+        self.assertEqual(self.pipeline.cleaned, ["T-1"])
+        self.assertNotIn("T-1", self.bridge._task_sources)
+        self.assertNotIn(report_one, self.bridge._selections)
+        self.assertNotIn(first_book, self.bridge._selections)
+        self.assertNotIn(first_book, self.bridge._commit_previews)
+        self.assertEqual(self.bridge._task_sources["T-2"], (second_report, report_two))
+        self.assertIn(report_two, self.bridge._selections)
+        self.assertIn(second_book, self.bridge._selections)
+        self.assertIn(second_book, self.bridge._commit_previews)
 
 
 class AppBootstrapTests(unittest.TestCase):

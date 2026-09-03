@@ -237,11 +237,19 @@ class DesktopBridge:
         return {"findings": [asdict(item) for item in self._store.list_findings(task_id)]}
 
     @_public
-    def get_source_preview(self, task_id: Any, finding_id: Any) -> dict[str, Any]:
+    def get_source_preview(self, task_id: Any, finding_id: Any, selection_token: Any = None) -> dict[str, Any]:
         task = self._store.get_task(task_id)
         source_info = self._task_sources.get(task_id)
-        if task is None or source_info is None:
+        if task is None:
             raise _BridgeError("SOURCE_RESELECT_REQUIRED", "请重新选择原始报告以查看来源")
+        if source_info is None:
+            if selection_token is None:
+                raise _BridgeError("SOURCE_RESELECT_REQUIRED", "请重新选择原始报告以查看来源")
+            source = self._selection(selection_token, "report")
+            if _file_hash(source) != task.file_hash:
+                raise _BridgeError("SOURCE_HASH_CHANGED", "原始报告与任务不一致，请重新选择")
+            source_info = (source, str(selection_token))
+            self._task_sources[task_id] = source_info
         finding = self._get_finding(task_id, finding_id)
         source, _ = source_info
         if not source.is_file():
@@ -325,7 +333,11 @@ class DesktopBridge:
         if not isinstance(task_id, str) or not task_id: raise ValidationError("task_id不能为空")
         cleanup = getattr(self._pipeline, "cleanup_task", None)
         if callable(cleanup): cleanup(task_id)
-        self._task_sources.pop(task_id, None)
-        for token, (path, purpose) in list(self._selections.items()):
-            if purpose == "report": self._selections.pop(token, None)
+        source_info = self._task_sources.pop(task_id, None)
+        if source_info is not None:
+            self._selections.pop(source_info[1], None)
+        for token, preview in list(self._commit_previews.items()):
+            if preview[0] == task_id:
+                self._commit_previews.pop(token, None)
+                self._selections.pop(token, None)
         return {"task_id": task_id}
