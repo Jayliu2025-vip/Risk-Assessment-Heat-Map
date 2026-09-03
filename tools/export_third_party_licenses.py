@@ -82,6 +82,20 @@ def _artifact_sha256(distribution: metadata.Distribution) -> str:
     return digest.hexdigest()
 
 
+def _source_identifier(source: Path, distribution: metadata.Distribution) -> str:
+    """Return stable package-relative or repository-relative provenance only."""
+    source = source.resolve()
+    site_root = Path(distribution.locate_file(".")).resolve()
+    repo_root = Path(__file__).resolve().parents[1]
+    try:
+        return "distribution:" + source.relative_to(site_root).as_posix()
+    except ValueError:
+        try:
+            return "vendor:" + source.relative_to(repo_root).as_posix()
+        except ValueError:
+            raise LicenseMaterialUnavailable(f"BLOCKED package={distribution.metadata['Name']} file=untraceable-license-source")
+
+
 def _verified_rapidocr_vendor() -> tuple[list[Path], dict[str, object]]:
     directory = Path(__file__).resolve().parents[1] / "licenses" / "RapidOCR-3.9.2"
     license_file, model_notice = directory / "LICENSE", directory / "MODEL_NOTICE.md"
@@ -167,7 +181,7 @@ def _copy_package(name: str, output: Path, expected_version: str | None = None) 
         shutil.copy2(source, target)
         manifest_files.append({
             "path": target.relative_to(output).as_posix(),
-            "source_file": str(source),
+            "source_file": _source_identifier(source, distribution),
             "sha256": _sha256(target),
         })
     record: dict[str, object] = {

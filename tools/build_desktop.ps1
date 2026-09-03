@@ -34,7 +34,9 @@ foreach ($path in @($BuildPath, $DistPath, $InstallerPath, $LicensePath)) {
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $PythonExe -m pip check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $PythonExe -c "from rapidocr import RapidOCR; engine=RapidOCR(); assert engine is not None"
+$RapidOcrExe = Join-Path (Split-Path -Parent $PythonExe) 'rapidocr.exe'
+if (-not (Test-Path -LiteralPath $RapidOcrExe -PathType Leaf)) { Write-Error 'RAPIDOCR_ENVIRONMENT_CHECK_FAILED'; exit 2 }
+& $RapidOcrExe check
 if ($LASTEXITCODE -ne 0) { Write-Error 'RAPIDOCR_ENVIRONMENT_CHECK_FAILED'; exit $LASTEXITCODE }
 if (-not $SkipTests) {
     & $PythonExe -m unittest discover -s (Join-Path $RepoRoot 'tests') -p 'test_*.py'

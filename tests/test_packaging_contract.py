@@ -76,7 +76,7 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn("INSTALL_TIMEOUT", script)
         self.assertIn("UNINSTALL_TIMEOUT", script)
         self.assertIn("installer-log", script)
-        self.assertIn("Stop-Process -Id $process.Id", script)
+        self.assertIn("Stop-VerifiedRunProcesses", script)
         self.assertIn("CompletionProbe", script)
         self.assertIn("Get-CimInstance Win32_Process", script)
         self.assertIn("$PID", script)
@@ -87,6 +87,11 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn("DirectoryNotFoundException", script)
         self.assertIn("SMOKE_TIMEOUT", script)
         self.assertIn("-WindowStyle Hidden", script)
+        self.assertIn("WaitForExit()", script)
+        self.assertIn("exit_code=", script)
+        self.assertIn("Get-ChildProcess", script)
+        self.assertIn("ParentProcessId", script)
+        self.assertIn("Setup.tmp", script)
 
     def test_build_script_has_narrow_destructive_path_guard_and_iscc_blocker(self):
         script = (ROOT / "tools" / "build_desktop.ps1").read_text(encoding="utf-8")
@@ -104,6 +109,8 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn("PYTHON_3_13_X64_REQUIRED", script)
         self.assertIn("pip check", script)
         self.assertIn("RAPIDOCR_ENVIRONMENT_CHECK_FAILED", script)
+        self.assertIn("rapidocr.exe", script)
+        self.assertIn(" check", script)
 
     def test_license_exporter_writes_hashed_manifest_for_available_distribution(self):
         output = Path(tempfile.mkdtemp(prefix="rahm-license-test-")) / "licenses"
@@ -157,6 +164,11 @@ class PackagingContractTests(unittest.TestCase):
         openpyxl = next(record for record in manifest["packages"] if record["name"].lower() == "openpyxl")
         self.assertEqual("pypi_sdist", openpyxl["vendored_provenance"]["provenance_type"])
         self.assertEqual("cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050", openpyxl["vendored_provenance"]["sdist_sha256"])
+        for package in manifest["packages"]:
+            self.assertRegex(package["artifact_sha256"], r"^[0-9a-f]{64}$")
+            for copied in package["files"]:
+                self.assertNotIn(":\\", copied["source_file"])
+                self.assertFalse(copied["source_file"].startswith("/"))
 
     def test_license_export_defaults_to_the_packaged_distribution_lock(self):
         exporter = (ROOT / "tools" / "export_third_party_licenses.py").read_text(encoding="utf-8")

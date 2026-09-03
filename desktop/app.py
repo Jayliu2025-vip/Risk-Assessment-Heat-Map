@@ -122,9 +122,14 @@ if __name__ == "__main__":
         from desktop.smoke import run_synthetic_smoke
         try:
             run_synthetic_smoke()
-        except BaseException:
+        except BaseException as exc:
             # Never let a windowed PyInstaller bootloader surface a GUI error
             # dialog for the non-interactive smoke mode.
+            code = str(getattr(exc, "args", ("UNEXPECTED",))[0]).encode("ascii", "ignore")[:64]
+            try:
+                os.write(2, b"PACKAGED_DESKTOP_SMOKE_FAILED code=" + (code or b"UNEXPECTED") + b"\n")
+            except OSError:
+                pass
             os._exit(1)
         # A windowed PyInstaller executable has no ``sys.stdout``. File
         # descriptor 1 is nevertheless valid when the verifier redirects it.

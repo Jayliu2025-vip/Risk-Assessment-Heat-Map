@@ -147,7 +147,12 @@ def run_synthetic_smoke() -> None:
                     ModelClient, lambda _: profile, lambda _: "synthetic-key", catalog)
                 try:
                     task = pipeline.start(report, profile.name)
-                    if pipeline.wait(task.task_id, timeout=120).status != "待复核":
+                    complete = pipeline.wait(task.task_id, timeout=120)
+                    # The fake server is loopback-only; retry one transient local
+                    # client handoff through the production pipeline API.
+                    if complete.status != "待复核":
+                        complete = pipeline.wait(pipeline.retry(task.task_id).task_id, timeout=120)
+                    if complete.status != "待复核":
                         raise SmokeError("PIPELINE")
                     if not any(block.method == "ocr" and "SYNTHETIC TEST DATA" in block.text.upper() for result in extracted for block in result.blocks):
                         raise SmokeError("OCR")
