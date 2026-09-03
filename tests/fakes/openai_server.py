@@ -12,6 +12,26 @@ from typing import Any
 from tools.common import DIMS
 
 
+_VERTICAL_EVIDENCE_MARKERS = (
+    "LOCATORALPHA",
+    "LOCATORBETA",
+    "LOCATORGAMMA",
+    "SYNTHETICTESTDATA",
+)
+
+
+def _has_vertical_evidence(payload: dict[str, Any]) -> bool:
+    """Accept the vertical response only when its extracted evidence was sent."""
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return False
+    contents = [message.get("content", "") for message in messages if isinstance(message, dict)]
+    normalized = "".join("".join(str(content).upper().split()) for content in contents)
+    locator_markers = _VERTICAL_EVIDENCE_MARKERS[:3]
+    return (all(normalized.count(marker) == 1 for marker in locator_markers)
+            and _VERTICAL_EVIDENCE_MARKERS[3] in normalized)
+
+
 def _finding(finding_id: str, *, matched_risk_id: str, excerpt: str) -> dict[str, Any]:
     return {
         "finding_id": finding_id,
@@ -76,6 +96,9 @@ class FakeOpenAIServer:
                 owner.requests.append(payload)
                 if self.path != "/v1/chat/completions":
                     self.send_error(404)
+                    return
+                if owner.mode == "vertical" and not _has_vertical_evidence(payload):
+                    self._json(400, {"error": {"message": "vertical synthetic evidence required"}})
                     return
                 if owner.mode in {"auth", "auth_failed"}:
                     self._json(401, {"error": {"message": "denied"}})

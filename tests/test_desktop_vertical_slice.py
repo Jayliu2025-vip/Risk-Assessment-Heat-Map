@@ -7,8 +7,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 import socket
+import sqlite3
+import zipfile
 
 from openpyxl import load_workbook
+from openpyxl import Workbook
 
 from tools.common import assess_all, load_dataset
 
@@ -106,6 +109,46 @@ class DesktopVerticalSliceTests(unittest.TestCase):
         finally:
             guard.restore()
         self.assertTrue(guard.blocked)
+
+    def test_vertical_fake_rejects_redacted_transported_evidence(self) -> None:
+        from desktop import model_client
+        from tools.run_synthetic_desktop_acceptance import AcceptanceError, run_acceptance
+
+        original = model_client.build_analysis_messages
+
+        def redact(*args, **kwargs):
+            messages = original(*args, **kwargs)
+            messages[-1] = {"role": "user", "content": "REDACTED"}
+            return messages
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch("desktop.model_client.build_analysis_messages", side_effect=redact):
+                with self.assertRaisesRegex(AcceptanceError, "PIPELINE_FAILED"):
+                    run_acceptance(Path(temporary), keep_output=True)
+
+    def test_workbook_privacy_rejects_hidden_compressed_cell_and_relationship_path(self) -> None:
+        from tools.run_synthetic_desktop_acceptance import AcceptanceError, _verify_private_persistence
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report = root / "vertical_slice_report.pdf"
+            source = root / "audit_risk_register.xlsx"
+            output = root / "version.xlsx"
+            export = root / "export"
+            report.write_bytes(b"synthetic")
+            source.write_bytes(b"synthetic")
+            sqlite3.connect(root / "state.db").close()
+            workbook = Workbook()
+            workbook.active["A1"] = (str(report.resolve()) + " ") * 160
+            workbook.save(output)
+            with zipfile.ZipFile(output, "a", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("xl/externalLinks/_rels/externalLink1.xml.rels",
+                                 ("<Relationships><Relationship Target=\"" + str(report.resolve()) * 160
+                                  + "\"/></Relationships>").encode("utf-8"))
+            self.assertNotIn(str(report.resolve()).encode("utf-8"), output.read_bytes())
+            export.mkdir()
+            with self.assertRaisesRegex(AcceptanceError, "OUTPUT_PRIVACY"):
+                _verify_private_persistence(root / "state.db", report, source, output, export)
 
 
 if __name__ == "__main__":

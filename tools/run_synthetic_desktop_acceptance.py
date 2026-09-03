@@ -9,11 +9,13 @@ import ipaddress
 import logging
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import shutil
 import socket
 import sys
 import tempfile
 from urllib.parse import urlparse
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -41,6 +43,14 @@ VERTICAL_REPORT = FIXTURES / "vertical_slice_report.pdf"
 SOURCE_WORKBOOK = ROOT / "audit_risk_register.xlsx"
 _FULL_BODY_SENTINEL = b"VERTICAL-SYNTHETIC-FULL-BODY-SENTINEL-ONLY"
 _SYNTHETIC_KEY = "sk-synthetic"
+_VERTICAL_EVIDENCE_MARKERS = (
+    "LOCATORALPHA",
+    "LOCATORBETA",
+    "LOCATORGAMMA",
+    "SYNTHETICTESTDATA",
+)
+_MAX_XLSX_ENTRIES = 1_000
+_MAX_XLSX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 
 
 class AcceptanceError(RuntimeError):
@@ -189,19 +199,88 @@ def _reviewed_findings(pipeline: AnalysisPipeline, store: DesktopStore, task_id:
     return reviewed
 
 
+def _forbidden_encodings(report: Path, workbook: Path) -> tuple[bytes, ...]:
+    values = (_SYNTHETIC_KEY, _FULL_BODY_SENTINEL.decode("ascii"), str(report.resolve()), str(workbook.resolve()))
+    return tuple(encoding for value in values for encoding in (
+        value.encode("utf-8"), value.encode("utf-16-le"), value.encode("utf-16-be"),
+    ))
+
+
+def _contains_forbidden(body: bytes | str, forbidden: tuple[bytes, ...]) -> bool:
+    encoded = body.encode("utf-8") if isinstance(body, str) else body
+    return any(value in encoded for value in forbidden)
+
+
+def _safe_xlsx_members(output: Path) -> tuple[zipfile.ZipInfo, ...]:
+    try:
+        with zipfile.ZipFile(output) as archive:
+            members = tuple(archive.infolist())
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise AcceptanceError("OUTPUT_PRIVACY") from exc
+    if len(members) > _MAX_XLSX_ENTRIES:
+        raise AcceptanceError("OUTPUT_PRIVACY")
+    names: set[str] = set()
+    total_size = 0
+    for member in members:
+        name = member.filename
+        path = PurePosixPath(name)
+        if (not name or "\\" in name or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts)
+                or name in names or member.flag_bits & 0x1):
+            raise AcceptanceError("OUTPUT_PRIVACY")
+        names.add(name)
+        total_size += member.file_size
+        if total_size > _MAX_XLSX_UNCOMPRESSED_BYTES:
+            raise AcceptanceError("OUTPUT_PRIVACY")
+    return members
+
+
+def _verify_workbook_privacy(output: Path, forbidden: tuple[bytes, ...]) -> None:
+    members = _safe_xlsx_members(output)
+    try:
+        with zipfile.ZipFile(output) as archive:
+            for member in members:
+                if _contains_forbidden(archive.read(member), forbidden):
+                    raise AcceptanceError("OUTPUT_PRIVACY")
+        loaded = load_workbook(output, read_only=True, data_only=False)
+        try:
+            for sheet in loaded.worksheets:
+                for row in sheet.iter_rows():
+                    for cell in row:
+                        if isinstance(cell.value, str) and _contains_forbidden(cell.value, forbidden):
+                            raise AcceptanceError("OUTPUT_PRIVACY")
+        finally:
+            loaded.close()
+    except AcceptanceError:
+        raise
+    except (OSError, ValueError, zipfile.BadZipFile, KeyError) as exc:
+        raise AcceptanceError("OUTPUT_PRIVACY") from exc
+
+
+def _request_transports_vertical_evidence(request: object) -> bool:
+    if not isinstance(request, dict):
+        return False
+    messages = request.get("messages")
+    if not isinstance(messages, list):
+        return False
+    normalized = "".join("".join(str(message.get("content", "")).upper().split())
+                         for message in messages if isinstance(message, dict))
+    locator_markers = _VERTICAL_EVIDENCE_MARKERS[:3]
+    return (all(normalized.count(marker) == 1 for marker in locator_markers)
+            and _VERTICAL_EVIDENCE_MARKERS[3] in normalized)
+
+
 def _verify_private_persistence(state_db: Path, report: Path, workbook: Path, output: Path, export_dir: Path) -> None:
-    forbidden = (_SYNTHETIC_KEY.encode("utf-8"), _FULL_BODY_SENTINEL,
-                 str(report.resolve()).encode("utf-8"), str(workbook.resolve()).encode("utf-8"))
+    forbidden = _forbidden_encodings(report, workbook)
     raw = state_db.read_bytes()
-    for value in forbidden:
-        if value in raw:
-            raise AcceptanceError("PERSISTENCE_PRIVACY")
+    if _contains_forbidden(raw, forbidden):
+        raise AcceptanceError("PERSISTENCE_PRIVACY")
     for log in state_db.parent.rglob("*.log"):
         body = log.read_bytes()
-        if any(value in body for value in forbidden):
+        if _contains_forbidden(body, forbidden):
             raise AcceptanceError("LOG_PRIVACY")
-    for artifact in (output, *(path for path in export_dir.rglob("*") if path.is_file())):
-        if any(value in artifact.read_bytes() for value in forbidden):
+    _verify_workbook_privacy(output, forbidden)
+    for artifact in (path for path in export_dir.rglob("*") if path.is_file()):
+        if _contains_forbidden(artifact.read_bytes(), forbidden):
             raise AcceptanceError("OUTPUT_PRIVACY")
 
 
@@ -256,13 +335,13 @@ def run_acceptance(root: Path, *, keep_output: bool = False, offline_verify: boo
             )
             task = pipeline.start(report, profile.name)
             complete = pipeline.wait(task.task_id, timeout=120)
-            if complete.status != "待复核":
-                raise AcceptanceError("PIPELINE_FAILED")
             third_page = next((block for result in extracted for block in result.blocks if block.locator == "第 3 页"), None)
             normalized_ocr = "" if third_page is None else "".join(third_page.text.upper().split())
             if (third_page is None or third_page.method != "ocr" or "SYNTHETICTESTDATA" not in normalized_ocr
                     or "LOCATORGAMMA" not in normalized_ocr):
                 raise AcceptanceError("OCR_NOT_PROVEN")
+            if complete.status != "待复核":
+                raise AcceptanceError("PIPELINE_FAILED")
             findings = _reviewed_findings(pipeline, store, task.task_id)
             if [item.finding_id for item in findings] != ["F-001", "F-002", "F-003"]:
                 raise AcceptanceError("FINDING_IDS_INVALID")
@@ -308,6 +387,8 @@ def run_acceptance(root: Path, *, keep_output: bool = False, offline_verify: boo
                 raise AcceptanceError("NETWORK_GUARD")
             if any("authorization" in str(request).lower() for request in server.requests):
                 raise AcceptanceError("AUTHORIZATION_RECORDED")
+            if not any(_request_transports_vertical_evidence(request) for request in server.requests):
+                raise AcceptanceError("GROUNDING_INVALID")
             _verify_private_persistence(state_db_path(), report, source, output, result.export_dir)
             return {"findings": 3, "accepted": 2, "excluded": 1, "period": "2026H2", "periods": result.periods,
                     "source_unchanged": True, "temp_clean": True,
