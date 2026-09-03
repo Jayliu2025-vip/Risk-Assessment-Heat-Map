@@ -17,7 +17,7 @@ class ValidationError(ValueError):
 def _text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValidationError(f"{field}不能为空")
-    return value
+    return value.strip()
 
 
 def score_or_none(value: Any) -> int | None:
@@ -55,14 +55,16 @@ class AnalysisTask:
     extraction_method: str
 
     def __post_init__(self) -> None:
-        _text(self.task_id, "task_id")
-        _text(self.file_name, "file_name")
-        _text(self.file_hash, "file_hash")
-        _text(self.created_at, "created_at")
+        self.task_id = _text(self.task_id, "task_id")
+        self.file_name = _text(self.file_name, "file_name")
+        if ("/" in self.file_name or "\\" in self.file_name or self.file_name in (".", "..") or self.file_name.startswith(("/", "\\")) or (len(self.file_name) > 1 and self.file_name[1] == ":")):
+            raise ValidationError("file_name必须是叶级文件名")
+        self.file_hash = _text(self.file_hash, "file_hash")
+        self.created_at = _text(self.created_at, "created_at")
         if self.status not in ("提取中", "分析中", "待复核", "已完成", "失败"):
             raise ValidationError("无效任务状态")
-        _text(self.model_profile, "model_profile")
-        _text(self.extraction_method, "extraction_method")
+        self.model_profile = _text(self.model_profile, "model_profile")
+        self.extraction_method = _text(self.extraction_method, "extraction_method")
 
 
 @dataclass(slots=True)
@@ -74,12 +76,14 @@ class ExtractedBlock:
     image_path: str | None = None
 
     def __post_init__(self) -> None:
-        _text(self.locator, "locator")
-        _text(self.text, "text")
+        self.locator = _text(self.locator, "locator")
+        self.text = _text(self.text, "text")
         if self.method not in ("text", "ocr", "vision_required"):
             raise ValidationError("无效提取方法")
         if not isinstance(self.needs_review, bool):
             raise ValidationError("needs_review必须是布尔值")
+        if self.image_path is not None:
+            self.image_path = _text(self.image_path, "image_path")
 
 
 @dataclass(slots=True)
@@ -100,8 +104,8 @@ class FindingDraft:
 
     def __post_init__(self) -> None:
         for name in ("task_id", "finding_id", "title", "fact_summary", "source_page", "source_excerpt", "rationale"):
-            _text(getattr(self, name), name)
-        _domain(self.domain)
+            setattr(self, name, _text(getattr(self, name), name))
+        self.domain = _domain(self.domain)
         if not isinstance(self.matched_risk_id, str):
             raise ValidationError("matched_risk_id必须是字符串")
         self.matched_risk_id = self.matched_risk_id.strip()
@@ -122,7 +126,7 @@ class FindingDraft:
             raise ValidationError(f"未知风险ID: {risk_id}")
         if "needs_review" not in payload:
             raise ValidationError("needs_review不能为空")
-        return cls(task_id=task_id, finding_id=payload.get("finding_id"), title=payload.get("title"), fact_summary=payload.get("fact_summary"), source_page=payload.get("source_page"), source_excerpt=payload.get("source_excerpt"), matched_risk_id=risk_id, domain=payload.get("domain"), likelihood=payload.get("likelihood"), impact_scores=payload.get("impact_scores"), rationale=payload.get("rationale"), needs_review=payload["needs_review"], review_status=payload.get("review_status", "待确认"))
+        return cls(task_id=task_id, finding_id=payload.get("finding_id"), title=payload.get("title"), fact_summary=payload.get("fact_summary"), source_page=payload.get("source_page"), source_excerpt=payload.get("source_excerpt"), matched_risk_id=risk_id, domain=payload.get("domain"), likelihood=payload.get("likelihood"), impact_scores=payload.get("impact_scores"), rationale=payload.get("rationale"), needs_review=payload["needs_review"], review_status="待确认")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -136,12 +140,13 @@ class ModelProfile:
     supports_vision: bool
 
     def __post_init__(self) -> None:
-        _text(self.name, "name")
+        self.name = _text(self.name, "name")
         base = _text(self.base_url, "base_url")
+        self.base_url = base
         parsed = urlparse(base)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValidationError("base_url必须是http/https地址")
-        _text(self.model, "model")
+        self.model = _text(self.model, "model")
         if not isinstance(self.supports_vision, bool):
             raise ValidationError("supports_vision必须是布尔值")
 
@@ -153,7 +158,7 @@ class ConfirmedControl:
     key: bool
 
     def __post_init__(self) -> None:
-        _text(self.description, "description")
+        self.description = _text(self.description, "description")
         checked = score_or_none(self.score)
         if checked is None:
             raise ValidationError("score不能为空")
@@ -182,24 +187,32 @@ class RiskDecision:
             raise ValidationError("无效决策动作")
         if not isinstance(self.finding_ids, (tuple, list)) or any(not isinstance(fid, str) or not fid.strip() for fid in self.finding_ids):
             raise ValidationError("finding_ids必须是非空字符串列表")
-        self.finding_ids = tuple(self.finding_ids)
+        self.finding_ids = tuple(fid.strip() for fid in self.finding_ids)
+        if len(set(self.finding_ids)) != len(self.finding_ids):
+            raise ValidationError("finding_ids不得重复")
+        if self.domain is not None and not isinstance(self.domain, str):
+            raise ValidationError("domain必须是字符串")
+        if isinstance(self.domain, str):
+            self.domain = self.domain.strip()
+        for name in ("risk_id", "name", "description", "owner_dept", "period", "rationale"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, str):
+                raise ValidationError(f"{name}必须是字符串")
+            if isinstance(value, str):
+                setattr(self, name, value.strip())
         if self.action != "exclude":
             if not self.finding_ids:
                 raise ValidationError("合并或新建决策至少需要一个finding_id")
-            for name in ("risk_id", "name", "domain", "description", "owner_dept", "period", "rationale"):
-                _text(getattr(self, name), name)
-            _domain(self.domain)
+            for name in ("risk_id", "name", "description", "owner_dept", "period", "rationale"):
+                setattr(self, name, _text(getattr(self, name), name))
+            self.domain = _domain(self.domain)
             self.likelihood = score_or_none(self.likelihood)
             self.impact_scores = _scores(self.impact_scores)
             if self.likelihood is None:
                 raise ValidationError("likelihood不能为空")
         else:
-            if self.domain is not None:
-                _domain(self.domain)
-            if self.likelihood is not None:
-                self.likelihood = score_or_none(self.likelihood)
-            if self.impact_scores is not None:
-                self.impact_scores = _scores(self.impact_scores)
+            if any(getattr(self, name) is not None for name in ("risk_id", "name", "domain", "description", "owner_dept", "period", "likelihood", "impact_scores", "rationale")) or self.controls:
+                raise ValidationError("排除决策不得携带正式风险字段或控制")
         if not isinstance(self.controls, (tuple, list)) or any(not isinstance(control, ConfirmedControl) for control in self.controls):
             raise ValidationError("controls必须由ConfirmedControl组成")
         self.controls = tuple(self.controls)

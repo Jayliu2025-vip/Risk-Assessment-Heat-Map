@@ -1,5 +1,6 @@
+import json
 import unittest
-from dataclasses import MISSING, fields
+from dataclasses import MISSING, asdict, fields
 
 from desktop.models import (
     AnalysisTask,
@@ -58,6 +59,55 @@ class DesktopModelsTests(unittest.TestCase):
             FindingDraft.from_model("T001", payload, {"R001"})
         finding = FindingDraft.from_model("T001", self.valid_payload(), {"R001"})
         self.assertEqual(finding.review_status, "待确认")
+
+    def test_model_cannot_self_approve_finding(self):
+        for status in ("已接受", "已排除"):
+            payload = self.valid_payload()
+            payload["review_status"] = status
+            finding = FindingDraft.from_model("T001", payload, {"R001"})
+            self.assertEqual(finding.review_status, "待确认")
+
+    def test_analysis_task_accepts_leaf_filename_only_and_normalizes(self):
+        task = AnalysisTask(" T1 ", " report.pdf ", " h ", " now ", "提取中", " profile ", " text ")
+        self.assertEqual((task.task_id, task.file_name, task.file_hash, task.created_at, task.model_profile, task.extraction_method), ("T1", "report.pdf", "h", "now", "profile", "text"))
+        for name in ("C:\\reports\\report.pdf", "C:/reports/report.pdf", "/tmp/report.pdf", "..", ".", "a/b.pdf", "a\\b.pdf"):
+            with self.assertRaises(ValidationError):
+                AnalysisTask("T1", name, "h", "now", "提取中", "p", "text")
+
+    def test_json_roundtrip_all_dataclasses_and_decision_actions(self):
+        task = AnalysisTask("T1", "r.pdf", "h", "now", "提取中", "p", "text")
+        block = ExtractedBlock(" p1 ", " text ", "text", image_path=" image.png ")
+        finding = FindingDraft.from_model("T1", self.valid_payload(), {"R001"})
+        profile = ModelProfile(" p ", "https://example.test", " m ", True)
+        control = ConfirmedControl(" c ", 4, True)
+        risk = RiskDecision(action="create", finding_ids=("F1",), risk_id="R1", name="n", domain="采购与外包", description="d", owner_dept="o", period="p", likelihood=3, impact_scores={dim: 2 for dim in DIMS}, rationale="r", controls=(control,))
+        for value in (task, block, finding, profile, control, risk, RiskDecision(action="exclude", finding_ids=())):
+            json.dumps(asdict(value), ensure_ascii=False)
+        self.assertEqual(block.locator, "p1")
+        self.assertEqual(block.image_path, "image.png")
+        self.assertEqual(profile.model, "m")
+        self.assertEqual(control.description, "c")
+
+    def test_extracted_image_path_and_exclude_decision_are_strict(self):
+        with self.assertRaises(ValidationError):
+            ExtractedBlock("p", "t", "text", image_path=" ")
+        with self.assertRaises(ValidationError):
+            ExtractedBlock("p", "t", "text", image_path=3)
+        control = ConfirmedControl("c", 3, False)
+        for kwargs in ({"risk_id": "R1"}, {"domain": "采购与外包"}, {"controls": (control,)}):
+            with self.assertRaises(ValidationError):
+                RiskDecision(action="exclude", finding_ids=(), **kwargs)
+
+    def test_risk_decision_normalizes_ids_rejects_duplicates_and_types(self):
+        with self.assertRaises(ValidationError):
+            RiskDecision(action="exclude", finding_ids=(" F1 ", "F1"))
+        with self.assertRaises(ValidationError):
+            RiskDecision(action="exclude", finding_ids=(1,))
+        decision = RiskDecision(action="exclude", finding_ids=(" F1 ",))
+        self.assertEqual(decision.finding_ids, ("F1",))
+        for kwargs in ({"risk_id": 1}, {"name": 1}, {"description": 1}, {"owner_dept": 1}, {"period": 1}, {"rationale": 1}, {"likelihood": "3"}, {"impact_scores": []}):
+            with self.assertRaises(ValidationError):
+                RiskDecision(action="exclude", finding_ids=(), **kwargs)
 
     def test_score_strictness(self):
         for value in (True, False, 1.0, "3", 0, 6, "abc"):
