@@ -9,11 +9,15 @@ test.describe('synthetic desktop audit report workflow', () => {
       let findings = [finding('F-1','第一项'), finding('F-2','第二项'), finding('F-3','第三项')];
       let poll = 0;
       let startCalls = 0;
+      let workbookCalls = 0;
+      let loadCalls = 0;
       window.__desktopPollCount = () => poll;
       window.__desktopStartCalls = () => startCalls;
+      window.__desktopWorkbookCalls = () => workbookCalls;
+      window.__desktopLoadCalls = () => loadCalls;
       window.pywebview = { api: {
         get_bootstrap: async () => ({ profiles:[{name:'合成模型',base_url:'https://model.example.test',model:'synthetic',supports_vision:false}], domains }),
-        choose_report: async purpose => ({ selection_token: purpose === 'workbook' ? 'book' : 'report', basename: purpose === 'workbook' ? 'synthetic.xlsx' : 'synthetic.pdf' }),
+        choose_report: async purpose => { if(purpose !== 'workbook') return {selection_token:'report',basename:'synthetic.pdf'}; workbookCalls++; await new Promise(resolve => setTimeout(resolve, 100)); return {selection_token:'BOOK-A',basename:'synthetic.xlsx'}; },
         save_model_profile: async ({ name, base_url, model, supports_vision }) => ({ profile:{ name, base_url, model, supports_vision } }),
         test_model_profile: async () => ({ hostname:'model.example.test' }),
         start_analysis: async () => { startCalls++; await new Promise(resolve => setTimeout(resolve, 80)); return { task:{task_id:'T-1',status:'提取中',extraction_method:'text'} }; },
@@ -23,7 +27,7 @@ test.describe('synthetic desktop audit report workflow', () => {
         save_finding: async (_task, id, payload) => { if(dims.some(dim => Object.hasOwn(payload, dim)) || Object.keys(payload.impact_scores || {}).length !== dims.length) throw {code:'INVALID_PAYLOAD'}; findings = findings.map(item => item.finding_id === id ? {...payload, finding_id:id} : item); return { finding: findings.find(item => item.finding_id === id) }; },
         merge_findings: async (_task, ids, payload) => { if(dims.some(dim => Object.hasOwn(payload, dim)) || Object.keys(payload.impact_scores || {}).length !== dims.length) throw {code:'INVALID_PAYLOAD'}; const changed = []; findings = findings.map(item => { const next = item.finding_id === ids[1] ? {...item,review_status:'已排除'} : item.finding_id === ids[0] ? {...payload,finding_id:ids[0]} : item; if(ids.includes(item.finding_id)) changed.push(next); return next; }); return {findings:changed}; },
         split_finding: async (_task, id, payloads) => ({findings:[{...findings.find(item => item.finding_id === id),review_status:'已排除'},...payloads]}),
-        preview_commit: async (_task, _book, selectedPeriod, decisions, stage, controlsConfirmed) => { if(stage === 'load_controls') return {controls_by_decision:decisions.map(item => ({...item,controls:item.action === 'merge' ? [{description:'保留的合成控制',score:4,key:true}] : []}))}; const included = decisions.filter(item => item.action !== 'exclude').flatMap(item => item.finding_ids); if(!controlsConfirmed || findings.some(item => included.includes(item.finding_id) && item.review_status !== '已接受')) throw {code:'PENDING_REVIEW'}; if(selectedPeriod !== '2026H2' || decisions.some(item => item.action !== 'exclude' && (item.period !== selectedPeriod || item.domain !== '信息系统' || !item.controls.some(control => control.description === '保留的合成控制（已复核）' && control.score === 4 && control.key)))) throw {code:'STALE'}; return {commit_token:'once',new_risks:[{risk_id:'R900'}],updated_risks:[],new_controls:[],excluded_count:2,warnings:[]}; },
+        preview_commit: async (_task, workbookToken, selectedPeriod, decisions, stage, controlsConfirmed) => { if(stage === 'load_controls') { loadCalls++; await new Promise(resolve => setTimeout(resolve, 100)); return {controls_by_decision:decisions.map(item => ({...item,controls:item.action === 'merge' ? [{description:`CONTROL-${workbookToken}`,score:4,key:true}] : []}))}; } const included = decisions.filter(item => item.action !== 'exclude').flatMap(item => item.finding_ids); if(!controlsConfirmed || findings.some(item => included.includes(item.finding_id) && item.review_status !== '已接受')) throw {code:'PENDING_REVIEW'}; if(workbookToken !== 'BOOK-A' || selectedPeriod !== '2026H2' || decisions.some(item => item.action !== 'exclude' && (item.period !== selectedPeriod || item.domain !== '信息系统' || !item.controls.some(control => control.description === 'CONTROL-BOOK-A（已复核）' && control.score === 4 && control.key)))) throw {code:'STALE'}; return {commit_token:'once',new_risks:[{risk_id:'R900'}],updated_risks:[],new_controls:[],excluded_count:2,warnings:[]}; },
         commit_to_workbook: async (_task, _book, selectedPeriod, decisions) => ({workbook_path:'C:/synthetic/out.xlsx',export_dir:'C:/synthetic/export',period_data:{period:selectedPeriod,risks:[{risk_id:'R900',name:'确认风险',domain:'信息系统',description:'合成描述',owner_dept:'审计部',period:selectedPeriod,likelihood:3,...Object.fromEntries(dims.map(d => [d, 2])),rationale:'合成依据'}],controls:[]}})
       }};
     });
@@ -63,9 +67,12 @@ test.describe('synthetic desktop audit report workflow', () => {
     await page.locator('[data-finding-id="F-3"]').click();
     await page.getByRole('button', { name:'排除', exact:true }).click();
     await page.getByRole('button', { name:'进入风险评估' }).click();
-    await page.getByRole('button', { name:'选择工作簿并预览' }).click();
-    await expect(page.getByLabel('控制点 F-1')).toHaveValue('保留的合成控制');
-    await page.getByLabel('控制点 F-1').fill('保留的合成控制（已复核）');
+    await page.getByRole('button', { name:'选择工作簿并预览' }).dblclick();
+    await expect.poll(() => page.evaluate(() => window.__desktopWorkbookCalls())).toBe(1);
+    await expect.poll(() => page.evaluate(() => window.__desktopLoadCalls())).toBe(1);
+    await expect(page.getByLabel('控制点 F-1')).toHaveValue('CONTROL-BOOK-A');
+    await page.screenshot({ path:'output/playwright/desktop-step4-controls-1440x920.png' });
+    await page.getByLabel('控制点 F-1').fill('CONTROL-BOOK-A（已复核）');
     await page.getByLabel('控制点 F-1').press('Tab');
     await page.getByLabel('已确认当前控制措施').check();
     await page.getByRole('button', { name:'选择工作簿并预览' }).click();

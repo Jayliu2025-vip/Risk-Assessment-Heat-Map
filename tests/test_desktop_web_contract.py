@@ -60,7 +60,8 @@ class DesktopWebContractTests(unittest.TestCase):
 
     def test_desktop_script_uses_nested_scores_controls_and_race_guards(self) -> None:
         for marker in ("impact_scores", "load_controls", "controls_confirmed", "previewGeneration",
-                       "selectedFindingId", "startBusy", "pollGeneration"):
+                       "selectedFindingId", "startBusy", "pollGeneration", "previewBusy",
+                       "workbookGeneration", "controlsWorkbookToken"):
             self.assertIn(marker, self.script)
         self.assertNotIn("payload[key]=value;", self.script)
 
