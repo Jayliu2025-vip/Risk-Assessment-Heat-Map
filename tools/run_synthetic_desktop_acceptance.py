@@ -9,7 +9,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
-import sqlite3
+import socket
 import sys
 import tempfile
 from urllib.parse import urlparse
@@ -64,6 +64,53 @@ class MemoryKeyring:
         self._values.pop((service, username), None)
 
 
+class OfflineSocketGuard:
+    """Process-local network guard for an acceptance run; it never changes a firewall."""
+
+    _LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+
+    def __init__(self) -> None:
+        self._create_connection = socket.create_connection
+        self._getaddrinfo = socket.getaddrinfo
+        self.blocked: list[str] = []
+
+    @classmethod
+    def _host(cls, address: object) -> str:
+        if not isinstance(address, tuple) or not address or not isinstance(address[0], str):
+            raise AcceptanceError("OFFLINE_GUARD")
+        return address[0].lower()
+
+    def _allow(self, host: str) -> None:
+        if host not in self._LOOPBACK:
+            self.blocked.append(host)
+            raise AcceptanceError("OFFLINE_GUARD")
+
+    def install(self) -> None:
+        def guarded_connect(address: object, *args: object, **kwargs: object):
+            self._allow(self._host(address))
+            return self._create_connection(address, *args, **kwargs)
+
+        def guarded_getaddrinfo(host: str | None, *args: object, **kwargs: object):
+            if host is not None:
+                self._allow(host.lower())
+            return self._getaddrinfo(host, *args, **kwargs)
+
+        socket.create_connection = guarded_connect
+        socket.getaddrinfo = guarded_getaddrinfo
+
+    def restore(self) -> None:
+        socket.create_connection = self._create_connection
+        socket.getaddrinfo = self._getaddrinfo
+
+    def prove_external_blocked(self) -> None:
+        try:
+            socket.create_connection(("synthetic-external.invalid", 443), timeout=0.01)
+        except AcceptanceError as exc:
+            if exc.code == "OFFLINE_GUARD" and self.blocked == ["synthetic-external.invalid"]:
+                return
+        raise AcceptanceError("OFFLINE_GUARD")
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -101,32 +148,43 @@ def _catalog(source: Path, root: Path) -> list[dict]:
     return risks
 
 
-def _reviewed_findings(store: DesktopStore, task_id: str) -> tuple[FindingDraft, ...]:
+def _reviewed_findings(pipeline: AnalysisPipeline, store: DesktopStore, task_id: str) -> tuple[FindingDraft, ...]:
     pending = store.list_findings(task_id)
     if len(pending) != 3 or any(item.review_status != "待确认" for item in pending):
         raise AcceptanceError("FINDINGS_INVALID")
     if any("SYNTHETIC TEST DATA" not in item.source_excerpt for item in pending):
         raise AcceptanceError("GROUNDING_INVALID")
     first = FindingDraft(**{**asdict(pending[0]), "title": "Human-edited synthetic finding"})
-    accepted_second = FindingDraft(**{**asdict(pending[1]), "review_status": "已接受"})
-    accepted_first = FindingDraft(**{**asdict(first), "review_status": "已接受"})
-    excluded = FindingDraft(**{**asdict(pending[2]), "review_status": "已排除"})
-    store.save_findings((accepted_first, accepted_second, excluded))
-    return tuple(store.list_findings(task_id))
+    pipeline.review_findings(task_id, (first,))
+    edited = store.list_findings(task_id)
+    if not edited or edited[0].title != "Human-edited synthetic finding" or edited[0].review_status != "待确认":
+        raise AcceptanceError("REVIEW_API_INVALID")
+    store.set_review_status(task_id, "F-001", "已接受")
+    store.set_review_status(task_id, "F-002", "已接受")
+    store.set_review_status(task_id, "F-003", "已排除")
+    reviewed = tuple(store.list_findings(task_id))
+    if [item.review_status for item in reviewed] != ["已接受", "已接受", "已排除"]:
+        raise AcceptanceError("REVIEW_STATUS_INVALID")
+    return reviewed
 
 
-def _verify_private_persistence(state_db: Path, source: Path) -> None:
+def _verify_private_persistence(state_db: Path, report: Path, workbook: Path, output: Path, export_dir: Path) -> None:
+    forbidden = (_SYNTHETIC_KEY.encode("utf-8"), _FULL_BODY_SENTINEL,
+                 str(report.resolve()).encode("utf-8"), str(workbook.resolve()).encode("utf-8"))
     raw = state_db.read_bytes()
-    for forbidden in (_SYNTHETIC_KEY.encode("utf-8"), _FULL_BODY_SENTINEL, str(source.resolve()).encode("utf-8")):
-        if forbidden in raw:
+    for value in forbidden:
+        if value in raw:
             raise AcceptanceError("PERSISTENCE_PRIVACY")
     for log in state_db.parent.rglob("*.log"):
         body = log.read_bytes()
-        if any(value in body for value in (_SYNTHETIC_KEY.encode(), _FULL_BODY_SENTINEL, str(source.resolve()).encode())):
+        if any(value in body for value in forbidden):
             raise AcceptanceError("LOG_PRIVACY")
+    for artifact in (output, *(path for path in export_dir.rglob("*") if path.is_file())):
+        if any(value in artifact.read_bytes() for value in forbidden):
+            raise AcceptanceError("OUTPUT_PRIVACY")
 
 
-def run_acceptance(root: Path, *, keep_output: bool = False) -> dict[str, object]:
+def run_acceptance(root: Path, *, keep_output: bool = False, offline_verify: bool = False) -> dict[str, object]:
     """Execute one deterministic, fully local vertical slice under ``root``."""
     run_root = Path(root).resolve()
     if run_root.exists() and not run_root.is_dir():
@@ -144,12 +202,16 @@ def run_acceptance(root: Path, *, keep_output: bool = False) -> dict[str, object
     os.environ["LOCALAPPDATA"] = str(run_root / "localappdata")
     server: FakeOpenAIServer | None = None
     pipeline: AnalysisPipeline | None = None
+    offline_guard = OfflineSocketGuard() if offline_verify else None
     try:
         store = DesktopStore(state_db_path())
         tasks = TaskTempFiles(temp_root())
         catalog = _catalog(source, run_root)
         with FakeOpenAIServer(mode="vertical") as running_server:
             server = running_server
+            if offline_guard is not None:
+                offline_guard.install()
+                offline_guard.prove_external_blocked()
             _require_exact_loopback(server.base_url)
             profile = ModelProfile("synthetic-local", server.base_url, "synthetic-model", False)
             memory = MemoryKeyring()
@@ -160,15 +222,27 @@ def run_acceptance(root: Path, *, keep_output: bool = False) -> dict[str, object
                 _require_exact_loopback(checked_profile.base_url)
                 return ModelClient(checked_profile, api_key)
 
+            extracted = []
+
+            def extractor(path: Path, task_dir: Path):
+                result = extract_report(path, task_dir, RapidOcrEngine())
+                extracted.append(result)
+                return result
+
             pipeline = AnalysisPipeline(
-                store, tasks, lambda path, task_dir: extract_report(path, task_dir, RapidOcrEngine()),
+                store, tasks, extractor,
                 make_client, lambda _: profile, credentials.get_api_key, catalog,
             )
             task = pipeline.start(report, profile.name)
             complete = pipeline.wait(task.task_id, timeout=120)
             if complete.status != "待复核":
                 raise AcceptanceError("PIPELINE_FAILED")
-            findings = _reviewed_findings(store, task.task_id)
+            third_page = next((block for result in extracted for block in result.blocks if block.locator == "第 3 页"), None)
+            normalized_ocr = "" if third_page is None else "".join(third_page.text.upper().split())
+            if (third_page is None or third_page.method != "ocr" or "SYNTHETICTESTDATA" not in normalized_ocr
+                    or "LOCATORGAMMA" not in normalized_ocr):
+                raise AcceptanceError("OCR_NOT_PROVEN")
+            findings = _reviewed_findings(pipeline, store, task.task_id)
             if [item.finding_id for item in findings] != ["F-001", "F-002", "F-003"]:
                 raise AcceptanceError("FINDING_IDS_INVALID")
             decision = RiskDecision(
@@ -213,16 +287,21 @@ def run_acceptance(root: Path, *, keep_output: bool = False) -> dict[str, object
                 raise AcceptanceError("NETWORK_GUARD")
             if any("authorization" in str(request).lower() for request in server.requests):
                 raise AcceptanceError("AUTHORIZATION_RECORDED")
-            _verify_private_persistence(state_db_path(), source)
+            _verify_private_persistence(state_db_path(), report, source, output, result.export_dir)
             return {"findings": 3, "accepted": 2, "excluded": 1, "period": "2026H2", "periods": result.periods,
                     "source_unchanged": True, "temp_clean": True,
                     "workbook": output, "export_dir": result.export_dir, "residual": actual,
                     "source": source, "source_sha256": source_sha, "post_source_sha256": _sha256(source),
                     "task_temp_dir": tasks.task_dir(task.task_id), "state_db": state_db_path(),
-                    "server_requests": tuple(server.requests)}
+                    "server_requests": tuple(server.requests), "report": report,
+                    "ocr": {"locator": third_page.locator, "method": third_page.method},
+                    "offline_guard": offline_guard is not None and offline_guard.blocked == ["synthetic-external.invalid"],
+                    "output_files": tuple([output, *(path for path in result.export_dir.rglob("*") if path.is_file())])}
     finally:
         if pipeline is not None:
             pipeline.close()
+        if offline_guard is not None:
+            offline_guard.restore()
         if old_local_appdata is None:
             os.environ.pop("LOCALAPPDATA", None)
         else:
@@ -245,16 +324,19 @@ def _keep_root(value: str) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--keep-output", metavar="DIR")
+    parser.add_argument("--offline-verify", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.keep_output:
             root = _keep_root(args.keep_output)
             if root.exists():
                 root = Path(tempfile.mkdtemp(prefix="synthetic-desktop-acceptance-", dir=root))
-            result = run_acceptance(root, keep_output=True)
+            result = run_acceptance(root, keep_output=True, offline_verify=args.offline_verify)
         else:
             with tempfile.TemporaryDirectory(prefix="rahm-desktop-acceptance-") as directory:
-                result = run_acceptance(Path(directory))
+                result = run_acceptance(Path(directory), offline_verify=args.offline_verify)
+        if args.offline_verify and result["offline_guard"] is True:
+            print("OFFLINE_GUARD_OK loopback_only=true")
         print("DESKTOP_ACCEPTANCE_OK findings={findings} accepted={accepted} excluded={excluded} period={period} source_unchanged=true temp_clean=true".format(**result))
         return 0
     except AcceptanceError as exc:
