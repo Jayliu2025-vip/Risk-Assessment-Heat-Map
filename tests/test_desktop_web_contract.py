@@ -20,7 +20,8 @@ class DesktopWebContractTests(unittest.TestCase):
         for element_id in (
             "desktop-report-nav", "report-step-upload", "report-step-extract",
             "report-step-review", "report-step-commit", "report-source-viewer",
-            "report-finding-form", "report-change-preview",
+            "report-finding-form", "report-change-preview", "report-workbook-name",
+            "report-risk-decisions",
         ):
             self.assertIn(f'id="{element_id}"', self.html)
         self.assertIn("desktop-report-shell[hidden]", self.css)
@@ -64,6 +65,20 @@ class DesktopWebContractTests(unittest.TestCase):
                        "workbookGeneration", "controlsWorkbookToken"):
             self.assertIn(marker, self.script)
         self.assertNotIn("payload[key]=value;", self.script)
+
+    def test_workbook_is_selected_before_analysis_and_cannot_switch_at_commit(self) -> None:
+        self.assertIn('id="report-choose-workbook"', self.html)
+        self.assertIn("选择正式工作簿", self.html)
+        self.assertNotIn("选择工作簿并预览", self.html)
+        self.assertIn('call("start_analysis",selectedReport,selectedWorkbook,period', self.script)
+        self.assertNotIn('call("choose_report","workbook")', self.script.split("async function preview", 1)[1])
+
+    def test_decision_ui_preserves_merge_lineage_owner_and_remediation(self) -> None:
+        for marker in ("merged_finding_ids", "merged_into", "ownerDeptByFinding",
+                       "remediationByFinding", "remediation_status", "report-risk-decisions"):
+            self.assertIn(marker, self.script)
+        self.assertNotIn('owner_dept:"审计部"', self.script)
+        self.assertNotIn("被合并项标记为排除", self.script)
 
     def test_playwright_package_contract_is_pinned(self) -> None:
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))

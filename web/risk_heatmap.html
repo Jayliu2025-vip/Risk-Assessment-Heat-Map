@@ -115,6 +115,7 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
     <section id="report-step-upload">
       <h3>上传报告</h3>
       <div class="toolbar"><button class="btn primary" id="report-choose">选择报告</button><span id="report-file-name" class="note">尚未选择</span></div>
+      <div class="toolbar" style="margin-top:8px"><button class="btn" id="report-choose-workbook" type="button">选择正式工作簿</button><span id="report-workbook-name" class="note">尚未选择</span></div>
       <div class="frow"><label for="report-period">评估期间</label><input id="report-period" type="text" placeholder="例如 2026H2" autocomplete="off"><label for="report-model-profile">已保存模型</label><select id="report-model-profile"></select></div>
       <p id="report-model-summary" class="note"></p>
       <details><summary>模型设置</summary>
@@ -160,10 +161,11 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
 
     <section id="report-step-commit" hidden>
       <h3>进入风险评估</h3>
-      <p class="note">请先确认当前控制措施；确认前不会展示当前剩余风险或提交入口。</p>
+      <p class="note">使用开始分析时绑定的正式工作簿。请确认责任部门、整改状态和当前控制措施；确认前不会提交。</p>
+      <div id="report-risk-decisions" class="report-form" aria-live="polite"></div>
       <div id="report-current-controls" aria-live="polite"></div>
       <label class="report-confirm"><input id="report-controls-confirmed" type="checkbox"> 已确认当前控制措施</label>
-      <div class="toolbar"><button class="btn primary" id="report-preview" type="button">选择工作簿并预览</button></div>
+      <div class="toolbar"><button class="btn primary" id="report-preview" type="button">载入控制点 / 生成预览</button></div>
       <div id="report-change-preview" class="report-preview" hidden><h3>变更预览</h3><ul id="report-preview-list"></ul><button class="btn primary" id="report-commit" type="button">提交到工作簿</button></div>
     </section>
   </div>

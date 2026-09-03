@@ -352,7 +352,8 @@ class DesktopBridgeTests(unittest.TestCase):
 
     def test_human_save_merge_and_split_validate_before_atomic_write(self):
         self.seed_task()
-        self.store.save_findings([finding("T-1", "F-2")])
+        self.store.save_findings([finding("T-1", "F-2", fact_summary="虚构单位乙涉及金额 12 万元",
+                                           source_excerpt="F-2 独立来源摘录", rationale="F-2 独立维度证据")])
         payload = asdict(finding("evil", "wrong", review_status="已接受"))
         saved = self.bridge.save_finding("T-1", "F-1", payload)
         self.assertEqual(saved["finding"]["task_id"], "T-1")
@@ -362,7 +363,14 @@ class DesktopBridgeTests(unittest.TestCase):
         stored = {item.finding_id: item for item in self.store.list_findings("T-1")}
         self.assertEqual(stored["F-2"].review_status, "已接受")
         self.assertEqual(stored["F-2"].merged_into, "F-1")
+        self.assertEqual(stored["F-2"].fact_summary, "虚构单位乙涉及金额 12 万元")
+        self.assertEqual(stored["F-2"].source_excerpt, "F-2 独立来源摘录")
+        self.assertEqual(stored["F-2"].rationale, "F-2 独立维度证据")
         self.assertEqual(stored["F-1"].merged_finding_ids, ("F-2",))
+        edit = asdict(stored["F-1"])
+        edit.pop("merged_finding_ids"); edit.pop("merged_into")
+        self.bridge.save_finding("T-1", "F-1", edit)
+        self.assertEqual(self.store.list_findings("T-1")[0].merged_finding_ids, ("F-2",))
         before = [asdict(item) for item in self.store.list_findings("T-1")]
         invalid = self.bridge.split_finding("T-1", "F-1", [asdict(finding("x", "new")), {"finding_id": "bad"}])
         self.assertFalse(invalid["ok"])

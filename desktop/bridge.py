@@ -427,8 +427,12 @@ class DesktopBridge:
     @_public
     def save_finding(self, task_id: Any, finding_id: Any, payload: Any) -> dict[str, Any]:
         with self._task_lock(task_id):
-            self._get_finding(task_id, finding_id)
+            current = self._get_finding(task_id, finding_id)
             edited = self._finding_payload(payload); edited["task_id"], edited["finding_id"] = task_id, finding_id
+            # Merge lineage is server-managed. Editing the human-facing fields
+            # must never detach the preserved secondary evidence.
+            edited["merged_finding_ids"] = current.merged_finding_ids
+            edited["merged_into"] = current.merged_into
             saved = self._pipeline.review_findings(task_id, [FindingDraft(**edited)])[0]
         return {"finding": asdict(saved)}
 
