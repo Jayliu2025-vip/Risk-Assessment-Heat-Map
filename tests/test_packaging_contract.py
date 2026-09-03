@@ -91,7 +91,14 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn("exit_code=", script)
         self.assertIn("Get-ChildProcess", script)
         self.assertIn("ParentProcessId", script)
-        self.assertIn("Setup.tmp", script)
+        self.assertIn("Get-VerifiedRunProcess", script)
+        self.assertIn("$hasExactRunToken", script)
+        self.assertNotIn(
+            "$process -and -not $process.HasExited) { Stop-VerifiedRunProcesses",
+            script,
+        )
+        self.assertIn("SMOKE_PROCESS_STILL_RUNNING", script)
+        self.assertIn("INSTALLER_PROCESS_STILL_RUNNING", script)
 
     def test_build_script_has_narrow_destructive_path_guard_and_iscc_blocker(self):
         script = (ROOT / "tools" / "build_desktop.ps1").read_text(encoding="utf-8")

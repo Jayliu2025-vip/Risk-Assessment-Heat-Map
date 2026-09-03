@@ -28,17 +28,36 @@ function Get-ChildProcess([int]$RootProcessId) {
     return $result
 }
 
-function Stop-VerifiedRunProcesses([int]$RootProcessId, [string]$ExpectedExe, [string]$InstallRoot = '', [string]$LogPath = '') {
+function Get-VerifiedRunProcess([int]$RootProcessId, [string]$ExpectedExe, [string]$InstallRoot = '', [string]$LogPath = '', [int[]]$BaselineProcessIds = @()) {
+    $all = @(Get-CimInstance Win32_Process)
     $candidates = @(Get-ChildProcess $RootProcessId)
     $root = Get-CimInstance Win32_Process -Filter "ProcessId=$RootProcessId" -ErrorAction SilentlyContinue
     if ($root) { $candidates += $root }
+    $candidates += @($all | Where-Object {
+        $_.ExecutablePath -eq $ExpectedExe -or
+        ($LogPath -and ([string]$_.CommandLine).Contains("/LOG=$LogPath"))
+    })
+    $seen = [System.Collections.Generic.HashSet[int]]::new()
     foreach ($candidate in $candidates) {
+        if (-not $seen.Add([int]$candidate.ProcessId) -or $BaselineProcessIds -contains [int]$candidate.ProcessId) { continue }
         $command = [string]$candidate.CommandLine
         $isExactExe = $candidate.ExecutablePath -eq $ExpectedExe
-        $isExactInstallerChild = $InstallRoot -and $LogPath -and $command.Contains("/DIR=$InstallRoot") -and $command.Contains("/LOG=$LogPath") -and $command.Contains('Setup.tmp')
+        $isTempExe = $candidate.ExecutablePath -and ([System.IO.Path]::GetFullPath($candidate.ExecutablePath)).StartsWith([System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()), [System.StringComparison]::OrdinalIgnoreCase)
+        $hasExactRunToken = $LogPath -and $command.Contains("/LOG=$LogPath") -and ($command.Contains("/DIR=$InstallRoot") -or $command.Contains($ExpectedExe))
+        $isExactInstallerChild = $isTempExe -and $hasExactRunToken
         if ($isExactExe -or $isExactInstallerChild) {
-            Stop-Process -Id $candidate.ProcessId -Force -ErrorAction SilentlyContinue
+            $candidate
         }
+    }
+}
+
+function Stop-VerifiedRunProcesses([int]$RootProcessId, [string]$ExpectedExe, [string]$InstallRoot = '', [string]$LogPath = '', [int[]]$BaselineProcessIds = @()) {
+    $targets = @(Get-VerifiedRunProcess $RootProcessId $ExpectedExe $InstallRoot $LogPath $BaselineProcessIds)
+    foreach ($target in $targets) {
+        Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($target in $targets) {
+        Wait-Process -Id $target.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
     }
 }
 
@@ -48,6 +67,7 @@ function Invoke-ExactSmoke([string]$Exe) {
     $stdout = Join-Path $base "rahm-smoke-$id.out"
     $stderr = Join-Path $base "rahm-smoke-$id.err"
     $process = $null
+    $baselineProcessIds = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $Exe } | ForEach-Object { [int]$_.ProcessId })
     try {
         $process = Start-Process -FilePath $Exe -ArgumentList '--synthetic-smoke' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -WindowStyle Hidden -PassThru
         $deadline = (Get-Date).AddSeconds(120)
@@ -56,7 +76,7 @@ function Invoke-ExactSmoke([string]$Exe) {
             $process.Refresh()
         }
         if (-not $process.HasExited) {
-            Stop-VerifiedRunProcesses $process.Id $Exe
+            Stop-VerifiedRunProcesses $process.Id $Exe '' '' $baselineProcessIds
             throw 'SMOKE_TIMEOUT'
         }
         $process.WaitForExit()
@@ -66,7 +86,11 @@ function Invoke-ExactSmoke([string]$Exe) {
         $errBytes = if (Test-Path -LiteralPath $stderr) { (Get-Item -LiteralPath $stderr).Length } else { 0 }
         if ($process.ExitCode -ne 0 -or $errors -ne '' -or $result -ne "PACKAGED_DESKTOP_SMOKE_OK`n") { throw "PACKAGED_SMOKE_FAILED exit_code=$($process.ExitCode) stdout_bytes=$outBytes stderr_bytes=$errBytes marker_exact=$($result -eq "PACKAGED_DESKTOP_SMOKE_OK`n")" }
     } finally {
-        if ($process -and -not $process.HasExited) { Stop-VerifiedRunProcesses $process.Id $Exe }
+        if ($process) {
+            Stop-VerifiedRunProcesses $process.Id $Exe '' '' $baselineProcessIds
+            $remaining = @(Get-VerifiedRunProcess $process.Id $Exe '' '' $baselineProcessIds)
+            if ($remaining) { throw 'SMOKE_PROCESS_STILL_RUNNING' }
+        }
         if (Test-Path -LiteralPath $stdout) { Remove-Item -LiteralPath $stdout -Force }
         if (Test-Path -LiteralPath $stderr) { Remove-Item -LiteralPath $stderr -Force }
     }
@@ -82,17 +106,22 @@ function Test-DirectoryAbsentOrEmpty([string]$Path) {
 }
 
 function Invoke-BoundedInstaller([string]$Exe, [string[]]$Arguments, [string]$Phase, [string]$LogPath, [string]$InstallRoot, [scriptblock]$CompletionProbe) {
+    $baselineProcessIds = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $Exe } | ForEach-Object { [int]$_.ProcessId })
     $process = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
-    $deadline = (Get-Date).AddSeconds(300)
-    while ((Get-Date) -lt $deadline) {
-        if (& $CompletionProbe) { return }
-        Start-Sleep -Milliseconds 250
+    try {
+        $deadline = (Get-Date).AddSeconds(300)
+        while ((Get-Date) -lt $deadline) {
+            if (& $CompletionProbe) { return }
+            Start-Sleep -Milliseconds 250
+        }
+        $tail = if (Test-Path -LiteralPath $LogPath) { (Get-Content -LiteralPath $LogPath -Tail 20) -join "`n" } else { '(installer log unavailable)' }
+        if ($Phase -eq 'INSTALL') { throw "INSTALL_TIMEOUT installer_log_tail=$tail" }
+        throw "UNINSTALL_TIMEOUT installer_log_tail=$tail"
+    } finally {
+        Stop-VerifiedRunProcesses $process.Id $Exe $InstallRoot $LogPath $baselineProcessIds
+        $remaining = @(Get-VerifiedRunProcess $process.Id $Exe $InstallRoot $LogPath $baselineProcessIds)
+        if ($remaining) { throw "INSTALLER_PROCESS_STILL_RUNNING phase=$Phase" }
     }
-    $process.Refresh()
-    if (-not $process.HasExited) { Stop-VerifiedRunProcesses $process.Id $Exe $installRoot $LogPath }
-    $tail = if (Test-Path -LiteralPath $LogPath) { (Get-Content -LiteralPath $LogPath -Tail 20) -join "`n" } else { '(installer log unavailable)' }
-    if ($Phase -eq 'INSTALL') { throw "INSTALL_TIMEOUT installer_log_tail=$tail" }
-    throw "UNINSTALL_TIMEOUT installer_log_tail=$tail"
 }
 
 function Test-InnoLog([string]$LogPath, [string]$SuccessMarker) {
