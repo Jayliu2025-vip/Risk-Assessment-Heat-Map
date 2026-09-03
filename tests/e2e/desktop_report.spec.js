@@ -106,4 +106,51 @@ test.describe('synthetic desktop audit report workflow', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
     await page.screenshot({ path:'output/playwright/browser-1120x720.png' });
   });
+
+  test('merged findings remain one complete lineage when the primary is excluded', async ({ page }) => {
+    await page.addInitScript(() => {
+      const dims=['imp_financial','imp_compliance','imp_operation','imp_reputation','imp_fraud','imp_strategy','imp_data','imp_hse'];
+      const domains=['战略与投资','治理与决策','资金活动','财务报告与税务','资产管理','采购与外包','合同管理','工程项目','人力资源','信息系统','合规与法律','安全环保'];
+      const finding=id=>({finding_id:id,title:`发现 ${id}`,fact_summary:`${id} 虚构金额`,source_page:'第 1 页',source_excerpt:`${id} 证据`,matched_risk_id:'R001',domain:'采购与外包',likelihood:3,impact_scores:Object.fromEntries(dims.map(dim=>[dim,2])),rationale:`${id} 独立依据`,needs_review:true,review_status:'待确认',merged_finding_ids:[],merged_into:''});
+      let findings=[finding('F-1'),finding('F-2')], committedDecisions=null;
+      window.__lineageCommit=()=>committedDecisions;
+      window.pywebview={api:{
+        get_bootstrap:async()=>({profiles:[{name:'合成模型',base_url:'https://model.example.test',model:'synthetic',supports_vision:false}],domains}),
+        choose_report:async purpose=>purpose==='report'?{selection_token:'REPORT',basename:'report.pdf'}:{selection_token:'BOOK',basename:'register.xlsx'},
+        test_model_profile:async()=>({hostname:'model.example.test'}),
+        start_analysis:async()=>({task:{task_id:'T-L',status:'提取中',extraction_method:'text'},period:'2026H2',risk_catalog:[{risk_id:'R001',period:'2026H2',owner_dept:'采购部'}]}),
+        get_task:async()=>({task:{task_id:'T-L',status:'待复核',extraction_method:'text'}}),
+        get_findings:async()=>({findings}),
+        get_source_preview:async(_task,id)=>({kind:'text',source_page:'第 1 页',source_excerpt:`${id} 真实预览`}),
+        save_finding:async(_task,id,payload)=>{const current=findings.find(item=>item.finding_id===id);if(payload.review_status==='已排除'&&current.merged_finding_ids.length){findings=findings.map(item=>[id,...current.merged_finding_ids].includes(item.finding_id)?{...item,review_status:'已排除'}:item);return {finding:findings.find(item=>item.finding_id===id),findings:findings.filter(item=>[id,...current.merged_finding_ids].includes(item.finding_id))};}findings=findings.map(item=>item.finding_id===id?{...item,...payload}:item);return {finding:findings.find(item=>item.finding_id===id)};},
+        merge_findings:async(_task,ids,payload)=>{findings=findings.map(item=>item.finding_id===ids[0]?{...item,...payload,merged_finding_ids:ids.slice(1),merged_into:''}:item.finding_id===ids[1]?{...item,review_status:'已接受',merged_into:ids[0]}:item);return {findings:findings.filter(item=>ids.includes(item.finding_id))};},
+        preview_commit:async(_task,_book,_period,decisions,stage)=>stage==='load_controls'?{controls_by_decision:[]}:{commit_token:'lineage-token',new_risks:[],updated_risks:[],new_controls:[],excluded_count:2,warnings:[]},
+        commit_to_workbook:async(_task,_book,selectedPeriod,decisions)=>{committedDecisions=decisions;return {workbook_path:'C:/synthetic/excluded.xlsx',export_dir:'C:/synthetic/export',period_data:{period:selectedPeriod,risks:[],controls:[]}};}
+      }};
+    });
+    await page.goto('file://' + process.cwd().replace(/\\/g, '/') + '/web/risk_heatmap.html');
+    await page.evaluate(() => window.dispatchEvent(new Event('pywebviewready')));
+    await page.locator('#desktop-report-nav').click();
+    await page.getByRole('button',{name:'选择报告'}).click();
+    await page.getByRole('button',{name:'选择正式工作簿'}).click();
+    await page.getByLabel('评估期间').fill('2026H2');
+    await page.locator('#report-step-upload details summary').click();
+    await page.getByRole('button',{name:'测试连接'}).click();
+    await page.getByRole('button',{name:'开始本地提取'}).click();
+    await expect(page.locator('#report-step-review')).toBeVisible();
+    await page.locator('[data-finding-id="F-1"]').click();
+    await page.getByRole('button',{name:'接受',exact:true}).click();
+    await page.locator('[data-finding-id="F-1"]').click();
+    await page.locator('[data-finding-id="F-2"]').click({modifiers:['Control']});
+    await page.getByRole('button',{name:'合并所选'}).click();
+    await page.locator('[data-finding-id="F-1"]').click();
+    await page.getByRole('button',{name:'排除',exact:true}).click();
+    await expect(page.locator('[data-finding-id="F-2"]')).toContainText('已合并至 F-1');
+    await page.getByRole('button',{name:'进入风险评估'}).click();
+    await page.getByRole('button',{name:'载入控制点 / 生成预览'}).click();
+    await page.getByLabel('已确认当前控制措施').check();
+    await page.getByRole('button',{name:'载入控制点 / 生成预览'}).click();
+    await page.getByRole('button',{name:'提交到工作簿'}).click();
+    await expect.poll(()=>page.evaluate(()=>window.__lineageCommit())).toEqual([{action:'exclude',finding_ids:['F-1','F-2']}]);
+  });
 });

@@ -79,6 +79,7 @@ class DesktopWebContractTests(unittest.TestCase):
             self.assertIn(marker, self.script)
         self.assertNotIn('owner_dept:"审计部"', self.script)
         self.assertNotIn("被合并项标记为排除", self.script)
+        self.assertIn('if(f.review_status==="已排除")return {action:"exclude",finding_ids}', self.script)
 
     def test_playwright_package_contract_is_pinned(self) -> None:
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))

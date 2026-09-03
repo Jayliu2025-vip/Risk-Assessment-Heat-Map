@@ -32,6 +32,21 @@ def evidence(*blocks: tuple[str, str]) -> str:
 
 
 class ModelClientTests(unittest.TestCase):
+    def test_fake_server_receives_only_minimal_projected_risk_catalog(self):
+        private_values = ("PRIVATE OWNER", "PRIVATE RATIONALE", "PRIVATE CONTROL")
+        full_catalog = [{"risk_id": "R003", "name": "虚构资金支付风险", "domain": "资金活动",
+                         "description": "仅测试使用", "owner_dept": private_values[0], "period": "2026H1",
+                         "likelihood": 5, "imp_financial": 5, "rationale": private_values[1],
+                         "controls": [{"description": private_values[2]}]}]
+        from desktop.bridge import project_model_catalog
+        with FakeOpenAIServer() as server:
+            with ModelClient(profile(server.base_url), "secret-key") as client:
+                client.analyze("T-1", evidence(("1", "虚构付款审批记录")), project_model_catalog(full_catalog), [])
+        request = json.dumps(server.requests, ensure_ascii=False)
+        self.assertIn("虚构资金支付风险", request)
+        self.assertIn("仅测试使用", request)
+        for value in private_values:
+            self.assertNotIn(value, request)
     def test_prompt_requires_units_amounts_and_dimension_specific_evidence(self) -> None:
         system = build_analysis_messages(
             evidence(("第 1 页", "虚构甲单位涉及金额 100 万元")),

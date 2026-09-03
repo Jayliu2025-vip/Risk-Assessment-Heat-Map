@@ -325,39 +325,20 @@ def _extract_docx(path: Path, temp_root: Path, ocr: OcrReader) -> list[Extracted
         raise ExtractionError("DOCX_READ_FAILED", f"无法读取Word文件：{path.name}") from exc
 
 
-def extract_docx_source_text(path: Path, locator: str) -> str:
-    """Re-read one structural DOCX location from a hash-checked snapshot."""
+def extract_docx_source_text(path: Path, locator: str, temp_dir: Path, ocr: OcrReader) -> str:
+    """Re-read one DOCX location through the same bounded text/OCR pipeline."""
     match = _DOCX_PREVIEW_LOCATOR.fullmatch(locator) if isinstance(locator, str) else None
     if match is None:
         raise ExtractionError("DOCX_LOCATOR_INVALID", "Word来源位置格式无效")
+    del match  # The strict locator is used below to select canonical blocks.
     source = Path(path)
     _source_size_ok(source)
-    _preflight_docx(source)
-    kind, wanted = match.group(1), int(match.group(2))
-    try:
-        document = Document(source)
-        count = 0
-        for child in document.element.body.iterchildren():
-            if kind == "段落" and child.tag.endswith("}p"):
-                count += 1
-                if count == wanted:
-                    text = Paragraph(child, document).text.strip()
-                    break
-            elif kind == "表格" and child.tag.endswith("}tbl"):
-                count += 1
-                if count == wanted:
-                    table = Table(child, document)
-                    text = "\n".join("\t".join(cell.text for cell in row.cells) for row in table.rows).strip()
-                    break
-        else:
-            raise ExtractionError("DOCX_LOCATOR_NOT_FOUND", "Word来源位置不存在")
-    except ExtractionError:
-        raise
-    except Exception as exc:
-        raise ExtractionError("DOCX_READ_FAILED", f"无法读取Word文件：{source.name}") from exc
-    if not text:
-        raise ExtractionError("DOCX_PREVIEW_EMPTY", "Word来源位置没有可显示文本")
-    return text[:MAX_DOCX_PREVIEW_CHARS]
+    temp_root = _safe_temp_root(temp_dir)
+    blocks = _extract_docx(source, temp_root, ocr)
+    selected = [block.text for block in blocks if block.locator == locator]
+    if not selected:
+        raise ExtractionError("DOCX_LOCATOR_NOT_FOUND", "Word来源位置不存在")
+    return "\n".join(selected)[:MAX_DOCX_PREVIEW_CHARS]
 
 
 def _aggregate_method(blocks: list[ExtractedBlock]) -> str:

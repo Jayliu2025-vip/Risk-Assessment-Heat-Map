@@ -11,7 +11,7 @@ from unittest.mock import patch
 import zipfile
 
 import desktop.extraction as extraction
-from desktop.extraction import ExtractionError, extract_report, text_is_usable
+from desktop.extraction import ExtractionError, extract_docx_source_text, extract_report, text_is_usable
 from desktop.ocr import OcrError, RapidOcrEngine
 from reportlab.pdfgen.canvas import Canvas
 from docx import Document
@@ -182,6 +182,17 @@ class ReportExtractionTests(unittest.TestCase):
         table_blocks = [block for block in result.blocks if block.locator == "Word 表格 1"]
         self.assertEqual([block.method for block in table_blocks], ["text", "ocr", "text"])
         self.assertEqual([block.text for block in table_blocks], ["CELL BEFORE", "Synthetic audit finding: approval was bypassed.", "CELL AFTER\tSECOND CELL"])
+
+    def test_docx_source_preview_reuses_ocr_blocks_for_image_only_and_inline_locations(self):
+        image_only = extract_docx_source_text(
+            FIXTURES / "mixed_report.docx", "Word 段落 3", self.temp, FakeOcr("IMAGE ONLY OCR EVIDENCE FROM SYNTHETIC AUDIT SOURCE"))
+        inline = extract_docx_source_text(
+            FIXTURES / "inline_report.docx", "Word 段落 2", self.temp, FakeOcr("INLINE OCR EVIDENCE FROM SYNTHETIC AUDIT SOURCE"))
+        table = extract_docx_source_text(
+            FIXTURES / "table_image_report.docx", "Word 表格 1", self.temp, FakeOcr("TABLE OCR EVIDENCE FROM SYNTHETIC AUDIT SOURCE"))
+        self.assertEqual(image_only, "IMAGE ONLY OCR EVIDENCE FROM SYNTHETIC AUDIT SOURCE")
+        self.assertEqual(inline.splitlines(), ["INLINE BEFORE", "INLINE OCR EVIDENCE FROM SYNTHETIC AUDIT SOURCE", "INLINE AFTER"])
+        self.assertEqual(table.splitlines(), ["CELL BEFORE", "TABLE OCR EVIDENCE FROM SYNTHETIC AUDIT SOURCE", "CELL AFTER\tSECOND CELL"])
 
     def test_ocr_import_init_and_inference_failures_are_sanitized(self):
         for factory in (lambda: (_ for _ in ()).throw(ImportError("secret path")), lambda: (_ for _ in ()).throw(RuntimeError("secret text"))):

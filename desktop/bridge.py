@@ -26,6 +26,7 @@ from .workbook_writer import load_current_controls, load_risk_catalog
 _PAGE = re.compile(r"^第 ([1-9][0-9]*) 页$")
 MAX_PREVIEW_PIXELS = 8_000_000
 MAX_PREVIEW_PNG_BYTES = 5 * 1024 * 1024
+MODEL_RISK_FIELDS = ("risk_id", "name", "domain", "description")
 
 
 class _BridgeError(Exception):
@@ -53,6 +54,16 @@ def _snapshot_preview_source(source: Path, destination: Path) -> str:
             digest.update(chunk)
             output_file.write(chunk)
     return digest.hexdigest()
+
+
+def project_model_catalog(catalog: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Keep local workbook fields private from the configured model service."""
+    projected = []
+    for item in catalog:
+        if not isinstance(item, Mapping):
+            raise ValidationError("风险目录条目无效")
+        projected.append({field: item.get(field, "") for field in MODEL_RISK_FIELDS})
+    return projected
 
 
 def _safe_error(exc: Exception) -> dict[str, Any]:
@@ -91,7 +102,7 @@ class DesktopBridge:
     def __init__(self, *, store: Any, pipeline: Any, credential_store: Any,
                  model_client_factory: Callable[[ModelProfile, str], Any], workbook_writer: Any,
                  risk_catalog: Iterable[Mapping[str, Any]], pdf_preview_renderer: Callable[[Path, int], bytes] | None = None,
-                 docx_preview_extractor: Callable[[Path, str], str] | None = None,
+                 docx_preview_extractor: Callable[[Path, str, Path], str] | None = None,
                  risk_catalog_loader: Callable[[Path], list[dict[str, Any]]] | None = None,
                  webview_module: Any | None = None, profile_lock: threading.RLock | None = None) -> None:
         self._store = store
@@ -101,7 +112,11 @@ class DesktopBridge:
         self._workbook_writer = workbook_writer
         self._risk_catalog = [dict(item) for item in risk_catalog]
         self._pdf_preview_renderer = pdf_preview_renderer or self._render_pdf_page
-        self._docx_preview_extractor = docx_preview_extractor or extract_docx_source_text
+        if docx_preview_extractor is None:
+            from .ocr import RapidOcrEngine
+            docx_preview_extractor = lambda path, locator, temp_root: extract_docx_source_text(
+                path, locator, temp_root, RapidOcrEngine())
+        self._docx_preview_extractor = docx_preview_extractor
         self._risk_catalog_loader = risk_catalog_loader or load_risk_catalog
         self._webview = webview_module
         self._window: Any | None = None
@@ -352,7 +367,7 @@ class DesktopBridge:
         catalog = self._risk_catalog_loader(workbook)
         if _file_hash(workbook) != before:
             raise _BridgeError("WORKBOOK_HASH_CHANGED", "工作簿读取期间发生变更，请重新选择")
-        task = self._pipeline.start(source, profile.name, catalog)
+        task = self._pipeline.start(source, profile.name, project_model_catalog(catalog))
         self._task_sources[task.task_id] = (source, str(selection_token))
         self._task_workbooks[task.task_id] = (workbook, str(workbook_selection_token), before, period, [dict(item) for item in catalog])
         return {"task": asdict(task), "risk_catalog": catalog, "period": period}
@@ -401,7 +416,7 @@ class DesktopBridge:
                 if pending_attachment is not None and self._preview_before_attach is not None:
                     self._preview_before_attach()
                 if source.suffix.lower() == ".docx":
-                    text = self._docx_preview_extractor(snapshot, finding.source_page)
+                    text = self._docx_preview_extractor(snapshot, finding.source_page, Path(directory))
                     if pending_attachment is not None:
                         self._task_sources[task_id] = pending_attachment
                     return {"kind": "text", "source_page": finding.source_page, "source_excerpt": text}
@@ -433,7 +448,19 @@ class DesktopBridge:
             # must never detach the preserved secondary evidence.
             edited["merged_finding_ids"] = current.merged_finding_ids
             edited["merged_into"] = current.merged_into
-            saved = self._pipeline.review_findings(task_id, [FindingDraft(**edited)])[0]
+            checked = FindingDraft(**edited)
+            if checked.review_status == "已排除" and current.merged_finding_ids:
+                existing = {item.finding_id: item for item in self._store.list_findings(task_id)}
+                updates = [checked]
+                for member_id in current.merged_finding_ids:
+                    member = existing.get(member_id)
+                    if member is None:
+                        raise _BridgeError("MERGE_LINEAGE_INVALID", "合并发现关系不完整")
+                    updates.append(FindingDraft(**{**asdict(member), "review_status": "已排除"}))
+                saved_group = self._pipeline.review_findings(task_id, updates)
+                primary = next(item for item in saved_group if item.finding_id == finding_id)
+                return {"finding": asdict(primary), "findings": [asdict(item) for item in saved_group]}
+            saved = self._pipeline.review_findings(task_id, [checked])[0]
         return {"finding": asdict(saved)}
 
     @_public
@@ -472,6 +499,8 @@ class DesktopBridge:
 
     def _split_finding(self, task_id: Any, finding_id: Any, payloads: Any) -> dict[str, Any]:
         original = self._get_finding(task_id, finding_id)
+        if original.merged_into:
+            raise ValidationError("请从合并主发现执行拆分")
         if not isinstance(payloads, (list, tuple)) or len(payloads) < 2:
             raise ValidationError("至少需要两个拆分发现")
         additions = []
@@ -481,8 +510,14 @@ class DesktopBridge:
         ids = [item.finding_id for item in additions]
         if len(ids) != len(set(ids)) or finding_id in ids:
             raise ValidationError("拆分发现ID不得重复")
-        excluded = FindingDraft(**{**asdict(original), "review_status": "已排除"})
-        saved = self._store.apply_finding_review_transaction(task_id, [excluded], additions)
+        existing = {item.finding_id: item for item in self._store.list_findings(task_id)}
+        excluded_group = [FindingDraft(**{**asdict(original), "review_status": "已排除"})]
+        for member_id in original.merged_finding_ids:
+            member = existing.get(member_id)
+            if member is None:
+                raise _BridgeError("MERGE_LINEAGE_INVALID", "合并发现关系不完整")
+            excluded_group.append(FindingDraft(**{**asdict(member), "review_status": "已排除"}))
+        saved = self._store.apply_finding_review_transaction(task_id, excluded_group, additions)
         return {"findings": [asdict(item) for item in saved]}
 
     @_public

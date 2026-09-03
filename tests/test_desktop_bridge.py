@@ -221,7 +221,7 @@ class DesktopBridgeTests(unittest.TestCase):
         self.seed_task("T-docx-injected", docx)
         self.store.save_findings([finding("T-docx-injected", "F-docx", source_page="Word 段落 1")])
         seen = []
-        self.bridge._docx_preview_extractor = lambda path, locator: (seen.append((Path(path), locator)) or "重新提取文本")
+        self.bridge._docx_preview_extractor = lambda path, locator, temp_root: (seen.append((Path(path), locator, Path(temp_root))) or "重新提取文本")
         token = self.select(docx)["selection_token"]
         self.bridge._task_sources["T-docx-injected"] = (docx, token)
         preview = self.bridge.get_source_preview("T-docx-injected", "F-docx")
@@ -246,9 +246,11 @@ class DesktopBridgeTests(unittest.TestCase):
         workbook = self.select(self.workbook, "workbook")["selection_token"]
         started = self.bridge.start_analysis(report, workbook, "2026H1", "synthetic")
         self.assertTrue(started["ok"])
-        catalog = self.pipeline.calls[-1][2]
-        row = next(item for item in catalog if item["risk_id"] == "R001" and item["period"] == "2026H1")
-        self.assertEqual(row["owner_dept"], "财务部")
+        model_catalog = self.pipeline.calls[-1][2]
+        row = next(item for item in model_catalog if item["risk_id"] == "R001")
+        self.assertEqual(set(row), {"risk_id", "name", "domain", "description"})
+        local_row = next(item for item in started["risk_catalog"] if item["risk_id"] == "R001" and item["period"] == "2026H1")
+        self.assertEqual(local_row["owner_dept"], "财务部")
         self.workbook.write_bytes(b"changed after analysis")
         blocked = self.bridge.preview_commit("T-1", workbook, "2026H1", [self.create_decision()], "preview", True)
         self.assertEqual(blocked["code"], "WORKBOOK_HASH_CHANGED")
@@ -381,6 +383,53 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(by_id["F-1"], "已排除")
         self.assertEqual(by_id["new-a"], "待确认")
 
+    def test_merge_then_exclude_commits_the_complete_lineage(self):
+        from desktop.models import RiskDecision
+        from desktop.workbook_writer import preview_changes, write_versioned_workbook
+
+        self.seed_task(); self.store.save_findings([finding("T-1", "F-2")])
+        payload = asdict(finding("T-1", "F-1", review_status="已接受"))
+        self.assertTrue(self.bridge.merge_findings("T-1", ["F-1", "F-2"], payload)["ok"])
+        payload["review_status"] = "已排除"
+        self.assertTrue(self.bridge.save_finding("T-1", "F-1", payload)["ok"])
+        stored = tuple(self.store.list_findings("T-1"))
+        self.assertEqual({item.finding_id: item.review_status for item in stored}, {"F-1": "已排除", "F-2": "已排除"})
+        decision = RiskDecision(action="exclude", finding_ids=("F-1", "F-2"))
+        preview = preview_changes(self.workbook, (decision,), stored)
+        result = write_versioned_workbook(self.workbook, (decision,), stored,
+                                          expected_commit_token=preview["commit_token"],
+                                          timestamp="20260904_0101", output_dir=self.root / "exclude-output")
+        self.assertTrue(result.workbook_path.is_file())
+
+    def test_merge_then_split_commits_children_without_orphaned_members(self):
+        from desktop.models import RiskDecision
+        from desktop.workbook_writer import preview_changes, write_versioned_workbook
+
+        self.seed_task(); self.store.save_findings([finding("T-1", "F-2")])
+        payload = asdict(finding("T-1", "F-1", review_status="已接受"))
+        self.bridge.merge_findings("T-1", ["F-1", "F-2"], payload)
+        child_a = asdict(finding("T-1", "F-1-A", matched_risk_id="", review_status="待确认"))
+        child_b = asdict(finding("T-1", "F-1-B", matched_risk_id="", review_status="待确认"))
+        self.assertTrue(self.bridge.split_finding("T-1", "F-1", [child_a, child_b])["ok"])
+        for child_id in ("F-1-A", "F-1-B"):
+            child = next(item for item in self.store.list_findings("T-1") if item.finding_id == child_id)
+            self.bridge.save_finding("T-1", child_id, {**asdict(child), "review_status": "已接受"})
+        stored = tuple(self.store.list_findings("T-1"))
+        statuses = {item.finding_id: item.review_status for item in stored}
+        self.assertEqual(statuses, {"F-1": "已排除", "F-1-A": "已接受", "F-1-B": "已接受", "F-2": "已排除"})
+        common = dict(action="create", risk_id="", name="拆分风险", domain="采购与外包",
+                      description="虚构拆分事实", owner_dept="采购部", period="2026H2", likelihood=3,
+                      impact_scores={dim: 2 for dim in DIMS}, rationale="虚构拆分证据",
+                      remediation_status="未整改")
+        decisions = (RiskDecision(action="exclude", finding_ids=("F-1", "F-2")),
+                     RiskDecision(finding_ids=("F-1-A",), **common),
+                     RiskDecision(finding_ids=("F-1-B",), **common))
+        preview = preview_changes(self.workbook, decisions, stored)
+        result = write_versioned_workbook(self.workbook, decisions, stored,
+                                          expected_commit_token=preview["commit_token"],
+                                          timestamp="20260904_0102", output_dir=self.root / "split-output")
+        self.assertTrue(result.workbook_path.is_file())
+
     def test_preview_and_commit_bind_selection_token_and_return_output_paths(self):
         self.seed_task()
         selected = {"selection_token": self.bind_workbook()}
@@ -439,7 +488,7 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual({item["finding_id"] for item in merged["findings"]}, {"F-1", "F-2"})
         split = self.bridge.split_finding("T-1", "F-1", [asdict(finding("T-1", "F-1-A")), asdict(finding("T-1", "F-1-B"))])
         self.assertEqual(set(split) - {"ok"}, {"findings"})
-        self.assertEqual({item["finding_id"] for item in split["findings"]}, {"F-1", "F-1-A", "F-1-B"})
+        self.assertEqual({item["finding_id"] for item in split["findings"]}, {"F-1", "F-2", "F-1-A", "F-1-B"})
         selected = {"selection_token": self.bind_workbook()}
         decision = [self.create_decision("F-1-A")]
         preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", decision, "preview", True)
@@ -482,7 +531,7 @@ class DesktopBridgeTests(unittest.TestCase):
         merged = self.bridge.merge_findings("T-1", ["F-1", "F-2"], payload)
         self.assertEqual({item["finding_id"] for item in merged["findings"]}, {"F-1", "F-2"})
         split = self.bridge.split_finding("T-1", "F-1", [asdict(finding("ignored", "F-1-A")), asdict(finding("ignored", "F-1-B"))])
-        self.assertEqual({item["finding_id"] for item in split["findings"]}, {"F-1", "F-1-A", "F-1-B"})
+        self.assertEqual({item["finding_id"] for item in split["findings"]}, {"F-1", "F-2", "F-1-A", "F-1-B"})
         extra = {**payload, "imp_financial": 2}
         rejected = self.bridge.save_finding("T-1", "F-1-A", extra)
         self.assertFalse(rejected["ok"])
