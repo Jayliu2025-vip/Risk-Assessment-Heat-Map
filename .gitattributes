@@ -1,0 +1,1 @@
+tests/fixtures/generated/*.pdf -text -diff
