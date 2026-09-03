@@ -28,3 +28,24 @@ copyright/NOTICE files into `THIRD_PARTY_NOTICES/`, include licenses for native
 PDFium, ONNX Runtime, PyInstaller bootloader, OCR models, and fonts/codecs, and
 record the source wheel hashes in the release manifest. Do not add PyMuPDF or
 `fitz` to the desktop runtime dependency set.
+
+`packaging/distribution_packages.lock.json` is the machine-readable release
+authority. It freezes the complete 58-distribution dependency closure resolved
+from the ten runtime roots and two build roots for Windows x64 with CPython 3.13,
+including transitive Python, native-wheel and PyInstaller build distributions.
+The generated `licenses/manifest.json` records a deterministic installed-payload
+hash and copied notice hashes for every locked distribution.
+
+The same lock also covers non-distribution runtime material actually shipped by
+the onedir build: CPython 3.13.14, the PyInstaller 6.22.2 Windows bootloader,
+Microsoft WebView2 SDK 1.0.3856.49, and the exact Microsoft Visual C++ runtime
+files selected from Windows System32. WebView2 SDK license and NOTICE text are taken
+from its exact official NuGet package; Visual C++ runtime redistribution terms are
+retained from Shapely's bundled `LICENSE_win32`. Where an installed wheel omitted license
+text, the lock records the exact PyPI sdist URL, filename, archive hash and
+license hash. ANTLR and FlatBuffers did not publish a usable license-bearing PyPI
+sdist for these versions, so their exact official version tags are recorded.
+`proxy_tools` 0.1.0 published an sdist without its license file; its exact PyPI
+sdist and the real upstream source commit containing the matching license are
+both pinned. The exporter blocks packaging if any locked version, license file,
+hash, component or PyInstaller-detected distribution falls outside this closure.

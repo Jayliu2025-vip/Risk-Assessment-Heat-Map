@@ -30,7 +30,7 @@ foreach ($path in @($BuildPath, $DistPath, $InstallerPath, $LicensePath)) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
 }
 
-& $PythonExe -c "import sys, platform, importlib.metadata as m; assert sys.version_info[:2] == (3, 13) and platform.architecture()[0] == '64bit', 'PYTHON_3_13_X64_REQUIRED'; assert m.version('PyInstaller') == '6.22.2'; import rapidocr, pypdfium2, onnxruntime, webview, keyring"
+& $PythonExe -c "import platform, importlib.metadata as m; assert platform.python_version() == '3.13.14' and platform.architecture()[0] == '64bit', 'PYTHON_3_13_X64_REQUIRED exact=3.13.14'; assert m.version('PyInstaller') == '6.22.2'; import rapidocr, pypdfium2, onnxruntime, webview, keyring"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $PythonExe -m pip check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -48,7 +48,22 @@ if (-not $SkipTests) {
 
 & $PythonExe (Join-Path $RepoRoot 'tools\export_third_party_licenses.py') --output $LicensePath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $PythonExe -m PyInstaller (Join-Path $RepoRoot 'packaging\risk_heatmap_desktop.spec') --workpath $BuildPath --distpath (Join-Path $RepoRoot 'dist') --noconfirm
+$PythonBase = (& $PythonExe -c "import sys; print(sys.base_prefix)").Trim()
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $PythonBase -PathType Container)) { throw 'PYTHON_BASE_NOT_FOUND' }
+$OriginalPath = $env:PATH
+$env:PATH = @(
+    (Split-Path -Parent $PythonExe),
+    $PythonBase,
+    (Join-Path $PythonBase 'DLLs'),
+    (Join-Path $env:SystemRoot 'System32'),
+    $env:SystemRoot
+) -join [System.IO.Path]::PathSeparator
+try {
+    & $PythonExe -m PyInstaller (Join-Path $RepoRoot 'packaging\risk_heatmap_desktop.spec') --workpath $BuildPath --distpath (Join-Path $RepoRoot 'dist') --noconfirm
+    $PyInstallerExitCode = $LASTEXITCODE
+} finally { $env:PATH = $OriginalPath }
+if ($PyInstallerExitCode -ne 0) { exit $PyInstallerExitCode }
+& $PythonExe (Join-Path $RepoRoot 'tools\export_third_party_licenses.py') --audit-analysis (Join-Path $BuildPath 'risk_heatmap_desktop\Analysis-00.toc') --dist-root $DistPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $OnedirExe = Join-Path $DistPath 'RiskAssessmentHeatMap.exe'

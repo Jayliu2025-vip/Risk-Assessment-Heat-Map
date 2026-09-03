@@ -1,17 +1,582 @@
 {
-  "schema": 1,
+  "schema": 2,
+  "target": {
+    "sys_platform": "win32",
+    "python_version": "3.13",
+    "implementation": "CPython",
+    "architecture": "x86_64"
+  },
+  "roots": [
+    {
+      "name": "pywebview",
+      "scope": "runtime"
+    },
+    {
+      "name": "pypdfium2",
+      "scope": "runtime"
+    },
+    {
+      "name": "python-docx",
+      "scope": "runtime"
+    },
+    {
+      "name": "rapidocr",
+      "scope": "runtime"
+    },
+    {
+      "name": "onnxruntime",
+      "scope": "runtime"
+    },
+    {
+      "name": "Pillow",
+      "scope": "runtime"
+    },
+    {
+      "name": "httpx",
+      "scope": "runtime"
+    },
+    {
+      "name": "keyring",
+      "scope": "runtime"
+    },
+    {
+      "name": "openpyxl",
+      "scope": "runtime"
+    },
+    {
+      "name": "matplotlib",
+      "scope": "runtime"
+    },
+    {
+      "name": "PyInstaller",
+      "scope": "build"
+    },
+    {
+      "name": "reportlab",
+      "scope": "build"
+    }
+  ],
   "packages": [
-    {"name": "pywebview", "version": "6.2.1"},
-    {"name": "pypdfium2", "version": "5.13.0"},
-    {"name": "python-docx", "version": "1.2.0"},
-    {"name": "RapidOCR", "version": "3.9.2"},
-    {"name": "onnxruntime", "version": "1.29.0"},
-    {"name": "Pillow", "version": "12.3.0"},
-    {"name": "httpx", "version": "0.28.1"},
-    {"name": "keyring", "version": "25.7.0"},
-    {"name": "openpyxl", "version": "3.1.5"},
-    {"name": "matplotlib", "version": "3.11.1"},
-    {"name": "PyInstaller", "version": "6.22.2"},
-    {"name": "reportlab", "version": "5.0.1"}
+    {
+      "name": "altgraph",
+      "version": "0.17.5",
+      "scope": "build",
+      "audit_required": false
+    },
+    {
+      "name": "antlr4-python3-runtime",
+      "version": "4.9.3",
+      "scope": "runtime",
+      "audit_required": false,
+      "vendored_provenance": {
+        "provenance_type": "upstream_tag",
+        "source_url": "https://github.com/antlr/antlr4/archive/refs/tags/4.9.3.tar.gz",
+        "source_filename": "antlr4-4.9.3.tar.gz",
+        "source_sha256": "efe4057d75ab48145d4683100fec7f77d7f87fa258707330cadd1f8e6f7eecae",
+        "license_path": "licenses/antlr4-python3-runtime-4.9.3/LICENSE.txt",
+        "license_sha256": "449b68147d2cf62d02d078390fcfe3df0fb605dec219c6192d9c0b2b569e2836",
+        "archive_license_path": "antlr4-4.9.3/LICENSE.txt",
+        "source_license_sha256": "b1b379fcaf3219593a4c433feb1b35c780bed23fafaae440b1ae2771a9521e3a",
+        "tag": "4.9.3"
+      }
+    },
+    {
+      "name": "anyio",
+      "version": "4.15.0",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "bottle",
+      "version": "0.13.4",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.5.1",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "clr_loader",
+      "version": "0.3.1",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "colorlog",
+      "version": "6.12.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "contourpy",
+      "version": "1.3.3",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "cycler",
+      "version": "0.12.1",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "et_xmlfile",
+      "version": "2.0.0",
+      "scope": "runtime",
+      "audit_required": false,
+      "vendored_provenance": {
+        "provenance_type": "pypi_sdist",
+        "source_url": "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da450eeec1fa3918940a5fafb9055e934af8d6eb0c2313/et_xmlfile-2.0.0.tar.gz",
+        "source_filename": "et_xmlfile-2.0.0.tar.gz",
+        "source_sha256": "dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54",
+        "license_path": "licenses/et_xmlfile-2.0.0/LICENCE.rst",
+        "license_sha256": "47f44a2772f6b3f814296c94cf615fd7170f39065155d170ed3b8f8c52833667",
+        "archive_license_path": "et_xmlfile-2.0.0/LICENCE.rst",
+        "source_license_sha256": "0c84bb42f5d367e5ebf9fc2dde35b16141df5ee0fdc189250858bc6c5560f69e",
+        "additional_license_files": [
+          {
+            "license_path": "licenses/et_xmlfile-2.0.0/LICENCE.python",
+            "license_sha256": "58e2fcbdb2f3e4fe95992940edf81e10300c8e2658bc55c96a108f813f9d2cd0",
+            "archive_license_path": "et_xmlfile-2.0.0/LICENCE.python",
+            "source_license_sha256": "4ccdaaebc0f44b83720ec0399bb7ab329adce067dd62f73c5535a2dc05628ab2"
+          }
+        ]
+      }
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "scope": "runtime",
+      "audit_required": false,
+      "vendored_provenance": {
+        "provenance_type": "upstream_tag",
+        "source_url": "https://github.com/google/flatbuffers/archive/refs/tags/v25.12.19.tar.gz",
+        "source_filename": "flatbuffers-v25.12.19.tar.gz",
+        "source_sha256": "f81c3162b1046fe8b84b9a0dbdd383e24fdbcf88583b9cb6028f90d04d90696a",
+        "license_path": "licenses/flatbuffers-25.12.19/LICENSE",
+        "license_sha256": "8c6db340475136df3c1201d458fa5755698eace76e510471ecc9d857d6083dac",
+        "archive_license_path": "flatbuffers-25.12.19/LICENSE",
+        "source_license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "tag": "v25.12.19",
+        "pypi_sdist": "unavailable"
+      }
+    },
+    {
+      "name": "fonttools",
+      "version": "4.64.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "idna",
+      "version": "3.19",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "jaraco.classes",
+      "version": "3.4.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "jaraco.context",
+      "version": "6.1.2",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "jaraco.functools",
+      "version": "4.6.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "keyring",
+      "version": "25.7.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "kiwisolver",
+      "version": "1.5.1",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "lxml",
+      "version": "6.1.3",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "matplotlib",
+      "version": "3.11.1",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "more-itertools",
+      "version": "11.1.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.2",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "omegaconf",
+      "version": "2.3.1",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.29.0",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "opencv-python",
+      "version": "5.0.0.93",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "openpyxl",
+      "version": "3.1.5",
+      "scope": "runtime",
+      "audit_required": false,
+      "vendored_provenance": {
+        "provenance_type": "pypi_sdist",
+        "source_url": "https://files.pythonhosted.org/packages/3d/f9/88d94a75de065ea32619465d2f77b29a0469500e99012523b91cc4141cd1/openpyxl-3.1.5.tar.gz",
+        "source_filename": "openpyxl-3.1.5.tar.gz",
+        "source_sha256": "cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050",
+        "license_path": "licenses/openpyxl-3.1.5/LICENCE.rst",
+        "license_sha256": "0c84bb42f5d367e5ebf9fc2dde35b16141df5ee0fdc189250858bc6c5560f69e",
+        "archive_license_path": "openpyxl-3.1.5/LICENCE.rst",
+        "source_license_sha256": "0c84bb42f5d367e5ebf9fc2dde35b16141df5ee0fdc189250858bc6c5560f69e"
+      }
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "pefile",
+      "version": "2024.8.26",
+      "scope": "build",
+      "audit_required": false
+    },
+    {
+      "name": "pillow",
+      "version": "12.3.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "protobuf",
+      "version": "7.36.1",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "proxy_tools",
+      "version": "0.1.0",
+      "scope": "runtime",
+      "audit_required": false,
+      "vendored_provenance": {
+        "provenance_type": "pypi_sdist_plus_upstream_commit",
+        "source_url": "https://files.pythonhosted.org/packages/f2/cf/77d3e19b7fabd03895caca7857ef51e4c409e0ca6b37ee6e9f7daa50b642/proxy_tools-0.1.0.tar.gz",
+        "source_filename": "proxy_tools-0.1.0.tar.gz",
+        "source_sha256": "ccb3751f529c047e2d8a58440d86b205303cf0fe8146f784d1cbcd94f0a28010",
+        "license_path": "licenses/proxy_tools-0.1.0/LICENSE.txt",
+        "license_sha256": "f96cf2b17c9b0cede77438165fdc6ea2f91bedb248d1779538727a2b93d71e12",
+        "source_license_sha256": "a428fb8a2e762af3eb0a6edbbb88e9b42ccfee80fd9b423958bcacf9b9abbfe4",
+        "license_url": "https://raw.githubusercontent.com/jtushman/proxy_tools/70b751ef5e0647d974506fd5871903711b5e1811/LICENSE.txt",
+        "upstream_commit": "70b751ef5e0647d974506fd5871903711b5e1811",
+        "upstream_source_url": "https://github.com/jtushman/proxy_tools/archive/70b751ef5e0647d974506fd5871903711b5e1811.tar.gz",
+        "upstream_source_sha256": "d7af57a5c71bcb76ba243ead90aaec1bfe20b2fb5cddac48ab3a2d01a4fa1119",
+        "sdist_license_file": "unavailable"
+      }
+    },
+    {
+      "name": "pyclipper",
+      "version": "1.4.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "pyinstaller",
+      "version": "6.22.2",
+      "scope": "build",
+      "audit_required": false
+    },
+    {
+      "name": "pyinstaller-hooks-contrib",
+      "version": "2026.7",
+      "scope": "build",
+      "audit_required": false
+    },
+    {
+      "name": "pyparsing",
+      "version": "3.3.2",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "pypdfium2",
+      "version": "5.13.0",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "python-dateutil",
+      "version": "2.9.0.post0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "python-docx",
+      "version": "1.2.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "pythonnet",
+      "version": "3.1.0",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "pywebview",
+      "version": "6.2.1",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "pywin32-ctypes",
+      "version": "0.2.3",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.3",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "rapidocr",
+      "version": "3.9.2",
+      "scope": "runtime",
+      "audit_required": true,
+      "vendored_provenance": {
+        "provenance_type": "upstream_tag",
+        "source_url": "https://github.com/RapidAI/RapidOCR/archive/refs/tags/v3.9.2.tar.gz",
+        "source_filename": "RapidOCR-v3.9.2.tar.gz",
+        "source_sha256": "0342bb616322661038eec54e6d14935a09e13fd0bcfecc7d8c3faf16e34fa805",
+        "license_path": "licenses/RapidOCR-3.9.2/LICENSE",
+        "license_sha256": "3e0af25fdd06aa9586ae97adb00ea927ebe5a3805ac77d2d3a81ce5f55693333",
+        "archive_license_path": "RapidOCR-3.9.2/LICENSE",
+        "source_license_sha256": "3e0af25fdd06aa9586ae97adb00ea927ebe5a3805ac77d2d3a81ce5f55693333",
+        "tag": "v3.9.2",
+        "commit": "095232a4c94f7f0e6600ba5bba1177010ad696d4",
+        "upstream_commit": "095232a4c94f7f0e6600ba5bba1177010ad696d4",
+        "models": [
+          "PP-OCRv6_det_small.onnx",
+          "PP-OCRv6_rec_small.onnx",
+          "ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+        ],
+        "additional_license_files": [
+          {
+            "license_path": "licenses/RapidOCR-3.9.2/MODEL_NOTICE.md",
+            "license_sha256": "39276209cc87435581d006648cf752b4f7797a3a727d520dcd7ffa855d1fd238"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reportlab",
+      "version": "5.0.1",
+      "scope": "build",
+      "audit_required": false
+    },
+    {
+      "name": "requests",
+      "version": "2.34.2",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "setuptools",
+      "version": "84.0.0",
+      "scope": "build",
+      "audit_required": false
+    },
+    {
+      "name": "shapely",
+      "version": "2.1.2",
+      "scope": "runtime",
+      "audit_required": true
+    },
+    {
+      "name": "six",
+      "version": "1.17.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "tqdm",
+      "version": "4.70.0",
+      "scope": "runtime",
+      "audit_required": false,
+      "vendored_provenance": {
+        "provenance_type": "pypi_sdist",
+        "source_url": "https://files.pythonhosted.org/packages/21/3b/6c24bec5be5e743ffd99576daa5cc077722fc7d5bbc00bd133fa0c698dc6/tqdm-4.70.0.tar.gz",
+        "source_filename": "tqdm-4.70.0.tar.gz",
+        "source_sha256": "55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220",
+        "license_path": "licenses/tqdm-4.70.0/LICENCE",
+        "license_sha256": "d1844e0b2fb2188fbe6ada2e01e7b0f6b35bf4800fa5dfab3b2750cd6007131e",
+        "archive_license_path": "tqdm-4.70.0/LICENCE",
+        "source_license_sha256": "fcff87c3a47ce8028a8512aa182d4fcf0ad1c90544ee75cf9b343684cac194de"
+      }
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.16.0",
+      "scope": "runtime",
+      "audit_required": false
+    },
+    {
+      "name": "urllib3",
+      "version": "2.7.0",
+      "scope": "runtime",
+      "audit_required": false
+    }
+  ],
+  "components": [
+    {
+      "name": "CPython",
+      "version": "3.13.14",
+      "kind": "runtime",
+      "artifact_locators": [
+        "python3.dll",
+        "python313.dll"
+      ],
+      "vendored_provenance": {
+        "provenance_type": "python_source_archive",
+        "source_url": "https://www.python.org/ftp/python/3.13.14/Python-3.13.14.tgz",
+        "source_filename": "Python-3.13.14.tgz",
+        "source_sha256": "5ae535a36af0ebca6fca176ecb8197f5db9c1cb8c8f0cd12cdf1787046db1f41",
+        "license_path": "licenses/CPython-3.13.14/LICENSE",
+        "license_sha256": "0c642c03bfe93432b716a3e3e2f0a77ef03e94c5f9b57a90f0ff95f206c221b5",
+        "archive_license_path": "Python-3.13.14/LICENSE",
+        "source_license_sha256": "78b12c3a81360b357002334f0e70ea0e92eebf7a9b358805c03c48484945f3bb"
+      }
+    },
+    {
+      "name": "PyInstaller bootloader",
+      "version": "6.22.2",
+      "kind": "bootloader",
+      "artifact_locator": "PyInstaller/bootloader/Windows-64bit-intel/runw.exe",
+      "license_distribution": "PyInstaller"
+    },
+    {
+      "name": "Microsoft WebView2 SDK",
+      "version": "1.0.3856.49",
+      "kind": "native-runtime",
+      "artifact_distribution": "pywebview",
+      "artifact_locators": [
+        "webview/lib/Microsoft.Web.WebView2.Core.dll",
+        "webview/lib/Microsoft.Web.WebView2.WinForms.dll",
+        "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll",
+        "webview/lib/runtimes/win-x64/native/WebView2Loader.dll",
+        "webview/lib/runtimes/win-x86/native/WebView2Loader.dll"
+      ],
+      "vendored_provenance": {
+        "provenance_type": "nuget_package",
+        "source_url": "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.3856.49",
+        "source_filename": "microsoft.web.webview2.1.0.3856.49.nupkg",
+        "source_sha256": "bc0f76eb911b569838dc4aa8f8d325269b966bedb592863d26211aef3a099f1a",
+        "license_path": "licenses/Microsoft.Web.WebView2-1.0.3856.49/LICENSE.txt",
+        "license_sha256": "324083bf015092054be9d5851dafa1b79cbfab3331ff983476d502839515d8bb",
+        "archive_license_path": "LICENSE.txt",
+        "source_license_sha256": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55",
+        "additional_license_files": [
+          {
+            "license_path": "licenses/Microsoft.Web.WebView2-1.0.3856.49/NOTICE.txt",
+            "license_sha256": "b75b4332450ff7b8dab78770247022b89f58cdde358a5d2afbd9e246d6e01caf",
+            "archive_license_path": "NOTICE.txt",
+            "source_license_sha256": "106423785c5b7eba0a8e61d1837f2132e9c828e20ad530f565d981c1df60dd90"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Microsoft Visual C++ Runtime",
+      "version": "14.50.35719.0",
+      "kind": "native-runtime",
+      "artifact_source": "system32",
+      "ambient_native_names": [
+        "msvcp140.dll",
+        "MSVCP140_1.dll"
+      ],
+      "artifact_sha256": {
+        "msvcp140.dll": "def46aa6a8f72f27bafac0c43334419486a4d1dcdb6c479a8ef7034b3e1fa4cb",
+        "MSVCP140_1.dll": "2dd670f874562fbdca5b022df1943d70a57ba91fde559280e3a1daebe4db2380"
+      },
+      "license_distribution": "shapely"
+    }
   ]
 }

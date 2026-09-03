@@ -1,0 +1,214 @@
+"""Release-license closure contracts for the Windows/Python 3.13 build."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+from importlib import metadata
+from pathlib import Path
+import tempfile
+import unittest
+
+from packaging.markers import default_environment
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+
+ROOT = Path(__file__).resolve().parents[1]
+LOCK_PATH = ROOT / "packaging" / "distribution_packages.lock.json"
+EXPORTER_PATH = ROOT / "tools" / "export_third_party_licenses.py"
+
+
+def _load_exporter():
+    spec = importlib.util.spec_from_file_location("license_exporter", EXPORTER_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _installed_closure(roots: list[str]) -> dict[str, str]:
+    environment = default_environment()
+    installed = {canonicalize_name(item.metadata["Name"]): item for item in metadata.distributions()}
+    closure: dict[str, str] = {}
+    pending = list(roots)
+    while pending:
+        requested = pending.pop()
+        name = canonicalize_name(requested)
+        if name in closure:
+            continue
+        distribution = installed[name]
+        closure[name] = distribution.version
+        for raw_requirement in distribution.requires or ():
+            requirement = Requirement(raw_requirement)
+            if requirement.marker and not requirement.marker.evaluate(environment):
+                continue
+            pending.append(requirement.name)
+    return closure
+
+
+class PackagingLicenseClosureTests(unittest.TestCase):
+    def setUp(self):
+        self.lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
+
+    def test_lock_freezes_complete_windows_python313_distribution_closure(self):
+        self.assertEqual(2, self.lock["schema"])
+        self.assertEqual("win32", self.lock["target"]["sys_platform"])
+        self.assertEqual("3.13", self.lock["target"]["python_version"])
+        roots = self.lock["roots"]
+        self.assertEqual(
+            {"pyinstaller", "reportlab"},
+            {canonicalize_name(item["name"]) for item in roots if item["scope"] == "build"},
+        )
+        locked = {canonicalize_name(item["name"]): item["version"] for item in self.lock["packages"]}
+        resolved = _installed_closure([item["name"] for item in roots])
+        self.assertEqual(resolved, locked)
+
+    def test_known_transitive_and_native_distributions_are_locked(self):
+        locked = {canonicalize_name(item["name"]) for item in self.lock["packages"]}
+        expected = {
+            "numpy",
+            "lxml",
+            "certifi",
+            "opencv-python",
+            "shapely",
+            "pythonnet",
+            "httpcore",
+            "anyio",
+            "clr-loader",
+            "cffi",
+            "pyinstaller-hooks-contrib",
+            "setuptools",
+        }
+        self.assertTrue(expected.issubset(locked), sorted(expected - locked))
+
+    def test_native_component_lock_names_every_packaged_runtime_artifact(self):
+        components = {item["name"]: item for item in self.lock["components"]}
+        self.assertEqual(
+            ["python3.dll", "python313.dll"],
+            components["CPython"]["artifact_locators"],
+        )
+        webview = components["Microsoft WebView2 SDK"]["artifact_locators"]
+        self.assertEqual(5, len(webview))
+        self.assertIn("webview/lib/runtimes/win-x64/native/WebView2Loader.dll", webview)
+        self.assertEqual(
+            ["msvcp140.dll", "MSVCP140_1.dll"],
+            components["Microsoft Visual C++ Runtime"]["ambient_native_names"],
+        )
+
+    def test_every_wheel_without_notice_has_frozen_vendored_provenance(self):
+        missing_wheel_notices = {
+            "antlr4-python3-runtime",
+            "et-xmlfile",
+            "flatbuffers",
+            "openpyxl",
+            "proxy-tools",
+            "rapidocr",
+            "tqdm",
+        }
+        packages = {canonicalize_name(item["name"]): item for item in self.lock["packages"]}
+        for name in missing_wheel_notices:
+            provenance = packages[name].get("vendored_provenance")
+            self.assertIsInstance(provenance, dict, name)
+            self.assertIn(
+                provenance["provenance_type"],
+                {"pypi_sdist", "upstream_tag", "pypi_sdist_plus_upstream_commit"},
+            )
+            self.assertRegex(provenance["source_sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(provenance["license_sha256"], r"^[0-9a-f]{64}$")
+            self.assertTrue(provenance["source_url"].startswith("https://"))
+            self.assertTrue(provenance["source_filename"])
+            self.assertTrue(provenance["license_path"])
+
+    def test_exported_manifest_covers_lock_and_runtime_components_without_absolute_paths(self):
+        exporter = _load_exporter()
+        output = Path(tempfile.mkdtemp(prefix="rahm-license-closure-")) / "licenses"
+        manifest = exporter.export_licenses(output)
+        locked = {canonicalize_name(item["name"]) for item in self.lock["packages"]}
+        exported = {canonicalize_name(item["name"]) for item in manifest["packages"]}
+        self.assertEqual(locked, exported)
+        component_names = {item["name"] for item in manifest["components"]}
+        self.assertEqual(
+            {
+                "CPython",
+                "PyInstaller bootloader",
+                "Microsoft WebView2 SDK",
+                "Microsoft Visual C++ Runtime",
+            },
+            component_names,
+        )
+        for record in [*manifest["packages"], *manifest["components"]]:
+            self.assertRegex(record["artifact_sha256"], r"^[0-9a-f]{64}$")
+            for copied in record["files"]:
+                self.assertNotIn(":\\", copied["source_file"])
+                self.assertFalse(copied["source_file"].startswith("/"))
+
+    def test_analysis_audit_blocks_detected_distribution_missing_from_lock(self):
+        exporter = _load_exporter()
+        numpy_distribution = metadata.distribution("numpy")
+        lxml_distribution = metadata.distribution("lxml")
+        numpy_source = next(
+            Path(numpy_distribution.locate_file(item))
+            for item in numpy_distribution.files or ()
+            if item.as_posix().endswith("numpy/__init__.py")
+        )
+        lxml_source = next(
+            Path(lxml_distribution.locate_file(item))
+            for item in lxml_distribution.files or ()
+            if item.as_posix().endswith("lxml/__init__.py")
+        )
+        temp = Path(tempfile.mkdtemp(prefix="rahm-analysis-audit-"))
+        toc = temp / "Analysis-00.toc"
+        toc.write_text(repr(([('numpy', str(numpy_source), 'PYMODULE'), ('lxml', str(lxml_source), 'PYMODULE')],)), encoding="utf-8")
+        incomplete_lock = {"packages": [{"name": "numpy", "version": metadata.version("numpy")}], "components": []}
+        with self.assertRaisesRegex(exporter.LicenseMaterialUnavailable, "lxml"):
+            exporter.audit_analysis_toc(toc, incomplete_lock)
+
+    def test_analysis_audit_blocks_ambient_native_runtime_outside_python_and_wheels(self):
+        exporter = _load_exporter()
+        temp = Path(tempfile.mkdtemp(prefix="rahm-ambient-native-"))
+        ambient = temp / "ambient-runtime.dll"
+        ambient.write_bytes(b"ambient")
+        toc = temp / "Analysis-00.toc"
+        toc.write_text(repr(([('ambient-runtime.dll', str(ambient), 'BINARY')],)), encoding="utf-8")
+        with self.assertRaisesRegex(exporter.LicenseMaterialUnavailable, "ambient-runtime.dll"):
+            exporter.audit_analysis_toc(toc, {"packages": [], "components": []})
+
+    def test_dist_audit_rejects_license_manifest_missing_locked_component(self):
+        exporter = _load_exporter()
+        temp = Path(tempfile.mkdtemp(prefix="rahm-dist-license-audit-"))
+        toc = temp / "Analysis-00.toc"
+        toc.write_text(repr(()), encoding="utf-8")
+        dist = temp / "dist"
+        licenses = dist / "_internal" / "licenses"
+        licenses.mkdir(parents=True)
+        (dist / "RiskAssessmentHeatMap.exe").write_bytes(b"bootloader")
+        (dist / "_internal" / "python313.dll").write_bytes(b"python")
+        (licenses / "manifest.json").write_text(
+            json.dumps({"packages": [], "components": [{"name": "CPython"}]}),
+            encoding="utf-8",
+        )
+        incomplete = {
+            "packages": [],
+            "components": [
+                {"name": "CPython"},
+                {"name": "Microsoft WebView2 SDK"},
+            ],
+        }
+        with self.assertRaisesRegex(exporter.LicenseMaterialUnavailable, "Microsoft WebView2 SDK"):
+            exporter.audit_analysis_toc(toc, incomplete, dist)
+
+    def test_build_runs_analysis_audit_after_pyinstaller(self):
+        script = (ROOT / "tools" / "build_desktop.ps1").read_text(encoding="utf-8")
+        pyinstaller = script.index("-m PyInstaller")
+        audit = script.index("--audit-analysis")
+        self.assertGreater(audit, pyinstaller)
+        self.assertIn("risk_heatmap_desktop\\Analysis-00.toc", script)
+        self.assertIn("$OriginalPath", script)
+        self.assertIn("$env:PATH =", script)
+        self.assertIn("finally { $env:PATH = $OriginalPath }", script)
+        self.assertIn("platform.python_version() == '3.13.14'", script)
+
+
+if __name__ == "__main__":
+    unittest.main()
