@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+import zipfile
 
 from docx import Document
 from docx.shared import Inches
@@ -14,6 +16,12 @@ from reportlab.pdfgen.canvas import Canvas
 ROOT = Path(__file__).resolve().parent / "generated"
 STAMP = "SYNTHETIC TEST DATA"
 FINDING = "Synthetic audit finding: approval was bypassed."
+TEXT_PAGES = (
+    "Synthetic audit report page one documents a simulated approval control gap. "
+    "The example is fabricated for extraction testing and contains no real evidence.",
+    "Synthetic audit report page two records a made-up remediation discussion. "
+    "All names, events, conclusions, and amounts are fictional test material only.",
+)
 
 
 def _font(size: int) -> ImageFont.ImageFont:
@@ -38,22 +46,31 @@ def _finding_image(path: Path) -> None:
 
 def _text_pdf(path: Path) -> None:
     canvas = Canvas(str(path), pagesize=letter, invariant=1)
-    pages = (
-        "Synthetic audit report page one documents a simulated approval control gap. "
-        "The example is fabricated for extraction testing and contains no real evidence.",
-        "Synthetic audit report page two records a made-up remediation discussion. "
-        "All names, events, conclusions, and amounts are fictional test material only.",
-    )
-    for text in pages:
+    for text in TEXT_PAGES:
         canvas.setFont("Helvetica-Bold", 12)
         canvas.drawString(72, 740, STAMP)
         canvas.setFont("Helvetica", 12)
         y = 690
-        for line in (text[:86], text[86:]):
+        for line in _wrapped_lines(canvas, text, letter[0] - 144):
             canvas.drawString(72, y, line)
             y -= 22
         canvas.showPage()
     canvas.save()
+
+
+def _wrapped_lines(canvas: Canvas, text: str, max_width: float) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        candidate = word if not current else f"{current} {word}"
+        if current and canvas.stringWidth(candidate, "Helvetica", 12) > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
 
 
 def _scan_pdf(path: Path, raster: Path) -> None:
@@ -62,10 +79,32 @@ def _scan_pdf(path: Path, raster: Path) -> None:
     canvas.save()
 
 
-def _docx(path: Path, image: Path, mixed: bool) -> None:
+def _stable_docx(path: Path) -> None:
+    with zipfile.ZipFile(path) as source:
+        entries = [(info.filename, source.read(info.filename)) for info in source.infolist()]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as target:
+        for name, data in sorted(entries):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 0
+            info.external_attr = 0
+            info.compress_type = zipfile.ZIP_DEFLATED
+            target.writestr(info, data, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+
+
+def _document() -> Document:
     document = Document()
+    fixed_time = datetime(1980, 1, 1, tzinfo=timezone.utc)
     document.core_properties.subject = "虚构测试资料 / SYNTHETIC TEST DATA"
     document.core_properties.comments = "Synthetic fixture; no real audit report."
+    document.core_properties.created = fixed_time
+    document.core_properties.modified = fixed_time
+    document.core_properties.last_modified_by = "Synthetic Fixture Builder"
+    document.core_properties.revision = 1
+    return document
+
+
+def _docx(path: Path, image: Path, mixed: bool) -> None:
+    document = _document()
     document.add_heading("虚构测试资料 / SYNTHETIC TEST DATA", level=1)
     if mixed:
         document.add_paragraph("Synthetic opening paragraph before the embedded finding.")
@@ -80,6 +119,31 @@ def _docx(path: Path, image: Path, mixed: bool) -> None:
         table.cell(1, 1).text = "Bypassed in fictional sample"
         document.add_paragraph("Synthetic final paragraph follows the table in document order.")
     document.save(path)
+    _stable_docx(path)
+
+
+def _inline_docx(path: Path, image: Path) -> None:
+    document = _document()
+    document.add_heading("虚构测试资料 / SYNTHETIC TEST DATA", level=1)
+    paragraph = document.add_paragraph()
+    paragraph.add_run("INLINE BEFORE")
+    paragraph.add_run().add_picture(str(image), width=Inches(4.5))
+    paragraph.add_run("INLINE AFTER")
+    document.save(path)
+    _stable_docx(path)
+
+
+def _table_image_docx(path: Path, image: Path) -> None:
+    document = _document()
+    document.add_heading("虚构测试资料 / SYNTHETIC TEST DATA", level=1)
+    table = document.add_table(rows=1, cols=2)
+    paragraph = table.cell(0, 0).paragraphs[0]
+    paragraph.add_run("CELL BEFORE")
+    paragraph.add_run().add_picture(str(image), width=Inches(2.3))
+    paragraph.add_run("CELL AFTER")
+    table.cell(0, 1).text = "SECOND CELL"
+    document.save(path)
+    _stable_docx(path)
 
 
 def build() -> Path:
@@ -90,6 +154,8 @@ def build() -> Path:
     _scan_pdf(ROOT / "scan_report.pdf", raster)
     _docx(ROOT / "report.docx", raster, mixed=False)
     _docx(ROOT / "mixed_report.docx", raster, mixed=True)
+    _inline_docx(ROOT / "inline_report.docx", raster)
+    _table_image_docx(ROOT / "table_image_report.docx", raster)
     return ROOT
 
 

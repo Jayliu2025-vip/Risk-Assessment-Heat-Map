@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
+import zipfile
 
+import desktop.extraction as extraction
 from desktop.extraction import ExtractionError, extract_report, text_is_usable
-from desktop.ocr import RapidOcrEngine
+from desktop.ocr import OcrError, RapidOcrEngine
+from reportlab.pdfgen.canvas import Canvas
+from tests.fixtures.build_audit_report_fixtures import TEXT_PAGES, _wrapped_lines, build
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "generated"
@@ -114,6 +121,101 @@ class ReportExtractionTests(unittest.TestCase):
         normalized = " ".join(result.blocks[0].text.lower().split())
         self.assertIn("synthetic", normalized)
         self.assertIn("approval", normalized)
+
+    def test_source_size_limit_is_checked_before_opening(self):
+        with patch.object(extraction, "MAX_SOURCE_BYTES", 1):
+            with self.assertRaises(ExtractionError) as caught:
+                extract_report(FIXTURES / "text_report.pdf", self.temp, FakeOcr())
+        self.assertEqual(caught.exception.code, "SOURCE_TOO_LARGE")
+        self.assertNotIn(str(FIXTURES), caught.exception.message)
+
+    def test_pdf_page_and_render_limits_are_rejected_before_ocr(self):
+        with patch.object(extraction, "MAX_PDF_PAGES", 0):
+            with self.assertRaises(ExtractionError) as caught:
+                extract_report(FIXTURES / "text_report.pdf", self.temp, FakeOcr())
+        self.assertEqual(caught.exception.code, "PDF_PAGE_LIMIT")
+        with patch.object(extraction, "MAX_RENDER_PIXELS", 1):
+            with self.assertRaises(ExtractionError) as caught:
+                extract_report(FIXTURES / "scan_report.pdf", self.temp, FakeOcr())
+        self.assertEqual(caught.exception.code, "PDF_RENDER_LIMIT")
+
+    def test_docx_zip_preflight_rejects_entry_count_size_and_ratio(self):
+        cases = (("MAX_DOCX_ENTRIES", 1, "DOCX_ENTRY_LIMIT"), ("MAX_DOCX_UNCOMPRESSED_BYTES", 1, "DOCX_SIZE_LIMIT"), ("MAX_DOCX_COMPRESSION_RATIO", 1, "DOCX_COMPRESSION_RATIO"))
+        for constant, value, code in cases:
+            with self.subTest(constant=constant), patch.object(extraction, constant, value):
+                with self.assertRaises(ExtractionError) as caught:
+                    extract_report(FIXTURES / "report.docx", self.temp, FakeOcr())
+                self.assertEqual(caught.exception.code, code)
+
+    def test_docx_zip_preflight_rejects_duplicate_and_traversal_entries(self):
+        duplicate = self.temp / "duplicate.docx"
+        traversal = self.temp / "traversal.docx"
+        with zipfile.ZipFile(FIXTURES / "report.docx") as source:
+            entries = [(info.filename, source.read(info.filename)) for info in source.infolist()]
+        for target, extra in ((duplicate, ("word/./document.xml", b"synthetic")), (traversal, ("../escape", b"synthetic"))):
+            with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+                for name, data in entries:
+                    archive.writestr(name, data)
+                archive.writestr(*extra)
+        for path, code in ((duplicate, "DOCX_DUPLICATE_ENTRY"), (traversal, "DOCX_ENTRY_PATH_INVALID")):
+            with self.subTest(path=path.name):
+                with self.assertRaises(ExtractionError) as caught:
+                    extract_report(path, self.temp, FakeOcr())
+                self.assertEqual(caught.exception.code, code)
+
+    def test_docx_image_byte_and_pixel_limits_are_checked_before_ocr(self):
+        for constant, code in (("MAX_IMAGE_BYTES", "IMAGE_BYTES_LIMIT"), ("MAX_IMAGE_PIXELS", "IMAGE_PIXELS_LIMIT")):
+            with self.subTest(constant=constant), patch.object(extraction, constant, 1):
+                with self.assertRaises(ExtractionError) as caught:
+                    extract_report(FIXTURES / "mixed_report.docx", self.temp, FakeOcr())
+                self.assertEqual(caught.exception.code, code)
+
+    def test_inline_docx_image_preserves_before_image_after_order(self):
+        result = extract_report(FIXTURES / "inline_report.docx", self.temp, FakeOcr())
+        texts = [block.text for block in result.blocks if block.locator == "Word 段落 2"]
+        self.assertEqual(texts, ["INLINE BEFORE", "Synthetic audit finding: approval was bypassed.", "INLINE AFTER"])
+        self.assertEqual([block.method for block in result.blocks if block.locator == "Word 段落 2"], ["text", "ocr", "text"])
+
+    def test_table_cell_image_preserves_cell_text_and_image_order(self):
+        result = extract_report(FIXTURES / "table_image_report.docx", self.temp, FakeOcr())
+        table_blocks = [block for block in result.blocks if block.locator == "Word 表格 1"]
+        self.assertEqual([block.method for block in table_blocks], ["text", "ocr", "text"])
+        self.assertEqual([block.text for block in table_blocks], ["CELL BEFORE", "Synthetic audit finding: approval was bypassed.", "CELL AFTER\tSECOND CELL"])
+
+    def test_ocr_import_init_and_inference_failures_are_sanitized(self):
+        for factory in (lambda: (_ for _ in ()).throw(ImportError("secret path")), lambda: (_ for _ in ()).throw(RuntimeError("secret text"))):
+            with self.subTest(factory=factory):
+                with self.assertRaises(OcrError) as caught:
+                    RapidOcrEngine(factory=factory).read(Path("private.png"))
+                self.assertEqual(caught.exception.code, "OCR_UNAVAILABLE")
+                self.assertNotIn("secret", caught.exception.message)
+        with self.assertRaises(OcrError) as caught:
+            RapidOcrEngine(engine=lambda _: (_ for _ in ()).throw(RuntimeError("secret text"))).read(Path("private.png"))
+        self.assertEqual(caught.exception.code, "OCR_FAILED")
+        self.assertNotIn("secret", caught.exception.message)
+
+    def test_ocr_failure_routes_scan_to_vision_without_leaking_error_text(self):
+        ocr = RapidOcrEngine(engine=lambda _: (_ for _ in ()).throw(RuntimeError("private evidence")))
+        result = extract_report(FIXTURES / "scan_report.pdf", self.temp, ocr)
+        self.assertEqual(result.blocks[0].method, "vision_required")
+        self.assertTrue(result.blocks[0].needs_review)
+        self.assertNotIn("private", result.blocks[0].text)
+        self.assertTrue(Path(result.blocks[0].image_path).is_file())
+
+    def test_docx_builder_is_deterministic_for_both_docx_fixtures(self):
+        build()
+        first = {name: sha256((FIXTURES / name).read_bytes()).hexdigest() for name in ("report.docx", "mixed_report.docx")}
+        build()
+        second = {name: sha256((FIXTURES / name).read_bytes()).hexdigest() for name in first}
+        self.assertEqual(first, second)
+
+    def test_pdf_fixture_word_wrap_keeps_every_line_inside_text_area(self):
+        canvas = Canvas(BytesIO())
+        canvas.setFont("Helvetica", 12)
+        for page in TEXT_PAGES:
+            lines = _wrapped_lines(canvas, page, 468)
+            self.assertEqual(" ".join(lines), page)
+            self.assertTrue(all(canvas.stringWidth(line, "Helvetica", 12) <= 468 for line in lines))
 
 
 if __name__ == "__main__":
