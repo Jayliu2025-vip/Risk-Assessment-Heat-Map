@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, fields
 from pathlib import Path
 
@@ -56,27 +57,42 @@ class DesktopStoreTests(unittest.TestCase):
         store.save_model_profile(profile)
         self.assertEqual([asdict(item) for item in store.list_model_profiles()], [asdict(profile)])
 
-    def test_task_delete_cascades_to_findings_and_cross_task_upsert_is_rejected(self):
+    def test_finding_id_is_task_scoped_and_task_delete_cascades(self):
         store = self.make_store()
         store.save_task(self.task("T-one"))
         store.save_task(self.task("T-two"))
-        store.save_findings([self.finding("T-one", "F-shared")])
-        with self.assertRaises(ValueError):
-            store.save_findings([self.finding("T-two", "F-shared")])
-        self.assertEqual(store.connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
-        with store.connection:
-            store.connection.execute("DELETE FROM analysis_tasks WHERE task_id = ?", ("T-one",))
+        first = self.finding("T-one", "F-shared")
+        second = self.finding("T-two", "F-shared")
+        second.title = "T-two original"
+        store.save_findings([first, second])
+        first.title = "T-one revised"
+        store.save_findings([first])
+        self.assertEqual(store.list_findings("T-one")[0].title, "T-one revised")
+        self.assertEqual(store.list_findings("T-two")[0].title, "T-two original")
+        connection = sqlite3.connect(store.db_path)
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+            with connection:
+                connection.execute("DELETE FROM analysis_tasks WHERE task_id = ?", ("T-one",))
+        finally:
+            connection.close()
         self.assertEqual(store.list_findings("T-one"), [])
         self.assertFalse(hasattr(store, "delete_task"))
 
     def test_invalid_raw_database_row_is_rejected_when_read(self):
         store = self.make_store()
         store.save_task(self.task())
-        store.connection.execute(
-            "INSERT INTO findings (task_id, finding_id, title, fact_summary, source_page, source_excerpt, matched_risk_id, domain, likelihood, impact_scores, rationale, needs_review, review_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("T-02", "invalid", "title", "fact", "1", "excerpt", "R001", "not-a-domain", 3, "{}", "why", 1, "待确认"),
-        )
-        store.connection.commit()
+        connection = sqlite3.connect(store.db_path)
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            with connection:
+                connection.execute(
+                    "INSERT INTO findings (task_id, finding_id, title, fact_summary, source_page, source_excerpt, matched_risk_id, domain, likelihood, impact_scores, rationale, needs_review, review_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    ("T-02", "invalid", "title", "fact", "1", "excerpt", "R001", "not-a-domain", 3, "{}", "why", 1, "待确认"),
+                )
+        finally:
+            connection.close()
         with self.assertRaises(ValidationError):
             store.list_findings("T-02")
 
@@ -109,11 +125,26 @@ class DesktopStoreTests(unittest.TestCase):
             source = temp.create(task.task_id) / "source.txt"
             source.write_text("虚构报告完整正文\nC:\\synthetic\\reports\\full-report.pdf", encoding="utf-8")
             self.assertEqual(temp.cleanup(task.task_id), [])
-        store.connection.commit()
-        payload = Path(store.path).read_bytes()
+        payload = store.db_path.read_bytes()
         for forbidden in (b"sk-synthetic-secret", "虚构报告完整正文".encode(), b"C:\\synthetic\\reports\\full-report.pdf"):
             self.assertNotIn(forbidden, payload)
         self.assertIn(finding.source_excerpt.encode(), payload)
+
+    def test_store_created_on_main_thread_persists_from_worker_thread(self):
+        store = self.make_store()
+        self.assertFalse(hasattr(store, "connection"))
+
+        def persist_from_worker():
+            task = self.task("T-worker")
+            finding = self.finding("T-worker", "F-worker")
+            store.save_task(task)
+            store.save_findings([finding])
+            return store.get_task(task.task_id), store.list_findings(task.task_id)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            task, findings = pool.submit(persist_from_worker).result()
+        self.assertEqual(task.task_id, "T-worker")
+        self.assertEqual([item.finding_id for item in findings], ["F-worker"])
 
 
 if __name__ == "__main__":
