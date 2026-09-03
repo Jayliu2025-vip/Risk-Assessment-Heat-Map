@@ -20,7 +20,9 @@ On 2026-09-03, the process-level offline verification command was:
 & 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' tools/run_synthetic_desktop_acceptance.py --offline-verify
 ```
 
-Its first evidence line is `OFFLINE_GUARD_OK loopback_only=true`, followed by the exact `DESKTOP_ACCEPTANCE_OK` line above. This installs a temporary Python socket/create-connection guard for the acceptance process only; it rejects non-loopback destinations before DNS or network activity. It does not claim that a machine firewall was changed.
+Its first evidence line is `OFFLINE_GUARD_OK loopback_only=true`, followed by the exact `DESKTOP_ACCEPTANCE_OK` line above. This installs a temporary Python socket/create-connection guard for the acceptance process only. It guards `socket.create_connection`, `socket.socket.connect`, `socket.socket.connect_ex`, and `socket.getaddrinfo`; only `localhost`, IPv4 `127/8`, and IPv6 `::1` are allowed. Non-loopback destinations are rejected before DNS or network activity.
+
+Also on 2026-09-03, an app-specific Windows Firewall-rule attempt was **BLOCKED**: `New-NetFirewallRule` returned `拒绝访问` because the process lacked administrator rights. Cleanup evidence was `FIREWALL_RULE_REMOVED=True`. No global firewall or network-adapter setting was changed. Physical-firewall and disconnected-machine confirmation remain packaging/final-release environment checks and are not claimed complete here.
 
 Use `--keep-output D:\safe-existing-or-new-child` only for an explicit local directory. The supplied directory is never deleted; the default run uses and removes a temporary directory.
 

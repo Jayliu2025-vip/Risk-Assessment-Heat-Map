@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import hashlib
+import ipaddress
 import logging
 import os
 from pathlib import Path
@@ -72,35 +73,55 @@ class OfflineSocketGuard:
     def __init__(self) -> None:
         self._create_connection = socket.create_connection
         self._getaddrinfo = socket.getaddrinfo
+        self._socket = socket.socket
         self.blocked: list[str] = []
 
     @classmethod
     def _host(cls, address: object) -> str:
-        if not isinstance(address, tuple) or not address or not isinstance(address[0], str):
+        if not isinstance(address, tuple) or not address or not isinstance(address[0], (str, bytes)):
             raise AcceptanceError("OFFLINE_GUARD")
-        return address[0].lower()
+        host = address[0].decode("ascii", "strict") if isinstance(address[0], bytes) else address[0]
+        return host.lower()
 
     def _allow(self, host: str) -> None:
-        if host not in self._LOOPBACK:
+        try:
+            allowed = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            allowed = host == "localhost"
+        if not allowed:
             self.blocked.append(host)
             raise AcceptanceError("OFFLINE_GUARD")
 
     def install(self) -> None:
-        def guarded_connect(address: object, *args: object, **kwargs: object):
-            self._allow(self._host(address))
-            return self._create_connection(address, *args, **kwargs)
+        owner = self
 
-        def guarded_getaddrinfo(host: str | None, *args: object, **kwargs: object):
+        def guarded_connect(address: object, *args: object, **kwargs: object):
+            owner._allow(owner._host(address))
+            return owner._create_connection(address, *args, **kwargs)
+
+        def guarded_getaddrinfo(host: str | bytes | None, *args: object, **kwargs: object):
             if host is not None:
-                self._allow(host.lower())
-            return self._getaddrinfo(host, *args, **kwargs)
+                text = host.decode("ascii", "strict") if isinstance(host, bytes) else host
+                owner._allow(text.lower())
+            return owner._getaddrinfo(host, *args, **kwargs)
+
+        class GuardedSocket(self._socket):
+            def connect(self, address: object) -> None:
+                owner._allow(owner._host(address))
+                return super().connect(address)
+
+            def connect_ex(self, address: object) -> int:
+                owner._allow(owner._host(address))
+                return super().connect_ex(address)
 
         socket.create_connection = guarded_connect
         socket.getaddrinfo = guarded_getaddrinfo
+        socket.socket = GuardedSocket
 
     def restore(self) -> None:
         socket.create_connection = self._create_connection
         socket.getaddrinfo = self._getaddrinfo
+        socket.socket = self._socket
 
     def prove_external_blocked(self) -> None:
         try:

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import socket
 
 from openpyxl import load_workbook
 
@@ -75,6 +76,36 @@ class DesktopVerticalSliceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             result = run_acceptance(Path(temporary), keep_output=True, offline_verify=True)
         self.assertTrue(result["offline_guard"])
+
+    def test_offline_guard_blocks_direct_socket_paths_but_allows_loopback_model_client(self) -> None:
+        from desktop.model_client import ModelClient
+        from desktop.models import ModelProfile
+        from tests.fakes.openai_server import FakeOpenAIServer
+        from tools.run_synthetic_desktop_acceptance import AcceptanceError, OfflineSocketGuard
+
+        guard = OfflineSocketGuard()
+        guard.install()
+        try:
+            with self.assertRaisesRegex(AcceptanceError, "OFFLINE_GUARD"):
+                socket.create_connection(("203.0.113.1", 443), timeout=0.01)
+            direct = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            direct.settimeout(0.01)
+            try:
+                with self.assertRaisesRegex(AcceptanceError, "OFFLINE_GUARD"):
+                    direct.connect(("203.0.113.1", 443))
+                with self.assertRaisesRegex(AcceptanceError, "OFFLINE_GUARD"):
+                    direct.connect_ex(("203.0.113.1", 443))
+            finally:
+                direct.close()
+            with self.assertRaisesRegex(AcceptanceError, "OFFLINE_GUARD"):
+                socket.getaddrinfo("synthetic-external.invalid", 443)
+            with FakeOpenAIServer(content="OK") as server:
+                profile = ModelProfile("loopback", server.base_url, "synthetic-model", False)
+                with ModelClient(profile, "sk-synthetic") as client:
+                    self.assertTrue(client.test_connection())
+        finally:
+            guard.restore()
+        self.assertTrue(guard.blocked)
 
 
 if __name__ == "__main__":
