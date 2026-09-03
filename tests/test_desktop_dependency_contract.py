@@ -52,6 +52,20 @@ class DesktopDependencyContractTests(unittest.TestCase):
             "PyInstaller": "6.22.2",
             "ReportLab": "5.0.1",
         }
+        expected_licenses = {
+            "pywebview": "BSD-3-Clause",
+            "pypdfium2": "Apache-2.0 OR BSD-3-Clause",
+            "python-docx": "MIT",
+            "RapidOCR": "Apache-2.0",
+            "ONNX Runtime": "MIT",
+            "Pillow": "MIT-CMU",
+            "httpx": "BSD-3-Clause",
+            "keyring": "MIT",
+            "openpyxl": "MIT",
+            "matplotlib": "Matplotlib license (PSF-compatible)",
+            "PyInstaller": "GPL-2.0-or-later (bootloader exception)",
+            "ReportLab": "BSD-3-Clause",
+        }
         rows = {}
         for line in notices.splitlines():
             cells = [cell.strip() for cell in line.split("|")[1:-1]]
@@ -62,12 +76,11 @@ class DesktopDependencyContractTests(unittest.TestCase):
                 rows[match.group(1)] = (match.group(2), cells[1:])
 
         self.assertEqual(set(rows), set(expected))
-        self.assertEqual(rows["pypdfium2"][1][0], "Apache-2.0 OR BSD-3-Clause")
         for name, version in expected.items():
             row_version, fields = rows[name]
             self.assertEqual(row_version, version)
             license_name, homepage, bundled, obligation = fields
-            self.assertTrue(license_name)
+            self.assertEqual(license_name, expected_licenses[name])
             self.assertRegex(homepage, r"https://\S+")
             self.assertTrue(bundled)
             self.assertTrue(obligation)
