@@ -57,6 +57,33 @@ class PackagingContractTests(unittest.TestCase):
         ):
             self.assertIn(required, script)
 
+    def test_inno_uses_the_installed_webview2_runtime_guid_and_never_blocks_silent_setup(self):
+        script = (ROOT / "packaging" / "RiskAssessmentHeatMap.iss").read_text(encoding="utf-8")
+        guid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+        self.assertIn("SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\" + guid, script)
+        self.assertIn("SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\" + guid, script)
+        self.assertIn("RegQueryStringValue(HKLM64", script)
+        self.assertNotIn("{F1E7E0A6-DF20-4A1F-B9F0-6A5D07D19F31}", script)
+        self.assertIn("not WizardSilent", script)
+        self.assertIn("Log(", script)
+
+    def test_verifier_bounds_installer_and_uninstaller_and_captures_logs(self):
+        script = (ROOT / "tools" / "verify_desktop_package.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("& $InstallerPath", script)
+        self.assertNotIn("& $uninstaller", script)
+        self.assertIn("AddSeconds(300)", script)
+        self.assertIn("INSTALL_TIMEOUT", script)
+        self.assertIn("UNINSTALL_TIMEOUT", script)
+        self.assertIn("installer-log", script)
+        self.assertIn("Stop-Process -Id $process.Id", script)
+        self.assertIn("CompletionProbe", script)
+        self.assertIn("Get-CimInstance Win32_Process", script)
+        self.assertIn("$PID", script)
+        self.assertIn("Installation process succeeded.", script)
+        self.assertIn("Uninstallation process succeeded.", script)
+        self.assertIn("Log closed.", script)
+        self.assertIn("$verified", script)
+
     def test_build_script_has_narrow_destructive_path_guard_and_iscc_blocker(self):
         script = (ROOT / "tools" / "build_desktop.ps1").read_text(encoding="utf-8")
         self.assertIn("Assert-AllowedBuildPath", script)

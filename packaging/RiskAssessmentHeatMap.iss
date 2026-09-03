@@ -30,13 +30,16 @@ function WebView2RuntimeInstalled: Boolean;
 var
   Version: String;
 begin
-  Result := RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F1E7E0A6-DF20-4A1F-B9F0-6A5D07D19F31}', 'pv', Version)
-    or RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F1E7E0A6-DF20-4A1F-B9F0-6A5D07D19F31}', 'pv', Version);
+  Result := RegQueryStringValue(HKLM64, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version)
+    or RegQueryStringValue(HKCU, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version);
 end;
 
 function InitializeSetup(): Boolean;
 begin
   Result := WebView2RuntimeInstalled;
-  if not Result then
-    MsgBox('Microsoft Edge WebView2 Runtime is required. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and run this setup again.', mbError, MB_OK);
+  if not Result then begin
+    Log('Microsoft Edge WebView2 Runtime is required. Install it from https://developer.microsoft.com/microsoft-edge/webview2/.');
+    if not WizardSilent then
+      MsgBox('Microsoft Edge WebView2 Runtime is required. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and run this setup again.', mbError, MB_OK);
+  end;
 end;
