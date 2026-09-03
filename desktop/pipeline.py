@@ -44,6 +44,7 @@ class _Runtime:
     images: list[_ImageCache] = field(default_factory=list)
     cancellation: threading.Event = field(default_factory=threading.Event)
     future: Future[Any] | None = None
+    retry_in_progress: bool = False
 
 
 class AnalysisPipeline:
@@ -113,6 +114,21 @@ class AnalysisPipeline:
                 digest.update(chunk)
         return digest.hexdigest()
 
+    def _snapshot_source(self, source: Path, task_id: str) -> tuple[Path, str]:
+        """Copy and hash one immutable per-task input without retaining its path."""
+        directory = self.temp_files.create(task_id)
+        snapshot = directory / f"source_snapshot{source.suffix.lower()}"
+        digest = hashlib.sha256()
+        try:
+            with source.open("rb") as input_file, snapshot.open("xb") as output_file:
+                while chunk := input_file.read(_HASH_CHUNK_BYTES):
+                    digest.update(chunk)
+                    output_file.write(chunk)
+        except Exception:
+            self.temp_files.cleanup(task_id)
+            raise ValueError("所选文件不可用") from None
+        return snapshot, digest.hexdigest()
+
     def _now(self) -> str:
         value = self.clock()
         if value.tzinfo is None:
@@ -163,15 +179,27 @@ class AnalysisPipeline:
             if not isinstance(profile, ModelProfile):
                 raise ValidationError("模型配置不可用")
             task_id = str(self.uuid_factory())
-            task = AnalysisTask(task_id, source.name, self._file_hash(source), self._now(), "提取中", profile.name, "pending")
-            # Task metadata exists before a worker is accepted.  No source path is sent to SQLite.
-            self.store.save_task(task)
-            self._event(task_id, "提取中", "TASK_STARTED", "已开始提取")
-            runtime = _Runtime(source=source)
-            self._runtime[task_id] = runtime
-            self.temp_files.create(task_id)
-            catalog = list(risk_catalog) if risk_catalog is not None else self.risk_catalog
-            runtime.future = self._executor.submit(lambda: self._run_extraction(task_id, source, catalog))
+            snapshot, file_hash = self._snapshot_source(source, task_id)
+            task = AnalysisTask(task_id, source.name, file_hash, self._now(), "提取中", profile.name, "pending")
+            try:
+                # Task metadata exists before a worker is accepted.  No source path is sent to SQLite.
+                self.store.save_task(task)
+                self._event(task_id, "提取中", "TASK_STARTED", "已开始提取")
+                runtime = _Runtime()
+                self._runtime[task_id] = runtime
+                catalog = list(risk_catalog) if risk_catalog is not None else self.risk_catalog
+                runtime.future = self._executor.submit(lambda: self._run_extraction(task_id, snapshot, catalog))
+            except Exception:
+                self._runtime.pop(task_id, None)
+                self._cleanup(task_id)
+                # A submit failure may occur after persistence; retain a safely
+                # failed task where possible, but never leave its snapshot behind.
+                if self.store.get_task(task_id) is not None:
+                    try:
+                        return self._set_status(task, "失败", "TASK_SUBMIT_FAILED", "任务无法启动")
+                    except Exception:
+                        pass
+                raise
             return task
 
     def wait(self, task_id: str, timeout: float | None = None) -> AnalysisTask:
@@ -198,6 +226,12 @@ class AnalysisPipeline:
                 # A task-scoped relative marker enables recovery without exposing
                 # a source path, report content, or an arbitrary filesystem path.
                 self._event(task_id, task.status, "TEMP_CLEANUP_RESIDUE", "任务临时文件未完全清理", residual_path=f"task-temp/{task_id}")
+
+    def _release_retry_reservation(self, task_id: str) -> None:
+        with self._lock:
+            runtime = self._runtime.get(task_id)
+            if runtime is not None:
+                runtime.retry_in_progress = False
 
     def _cancel_failure(self, task_id: str) -> None:
         task = self.store.get_task(task_id)
@@ -308,6 +342,7 @@ class AnalysisPipeline:
             self._run_model(task_id, catalog)
         finally:
             self._cleanup(task_id)
+            self._release_retry_reservation(task_id)
 
     def _temporary_images(self, task_id: str, cached: list[_ImageCache]) -> list[Path]:
         directory = self.temp_files.create(task_id)
@@ -358,10 +393,9 @@ class AnalysisPipeline:
                 if runtime is None or runtime.cancellation.is_set():
                     self._cancel_failure(task_id)
                     return
-                self.store.save_findings(findings)
-                task = self.store.get_task(task_id)
-                if task is not None:
-                    self._set_status(task, "待复核", "ANALYSIS_COMPLETED", "风险分析完成")
+                pending = AnalysisTask(task.task_id, task.file_name, task.file_hash, task.created_at, "待复核", task.model_profile, task.extraction_method)
+                self.store.commit_analysis_result(pending, findings)
+                self._event(task_id, "待复核", "ANALYSIS_COMPLETED", "风险分析完成")
                 runtime = self._runtime.get(task_id)
                 if runtime is not None:
                     runtime.evidence = None
@@ -370,45 +404,81 @@ class AnalysisPipeline:
             self._model_failure(task_id, exc)
 
     def retry(self, task_id: str, source_path: Path | str | None = None, risk_catalog: Iterable[Any] | None = None) -> AnalysisTask:
-        task = self.store.get_task(task_id)
-        if task is None:
-            raise KeyError("任务不存在")
-        if task.status != "失败":
-            raise ValueError("仅失败任务可重试")
         catalog = list(risk_catalog) if risk_catalog is not None else self.risk_catalog
         with self._lock:
+            # Reserve before queuing any work. A concurrent caller observes this
+            # reservation rather than a transient failure/analysis status.
+            if self._closed:
+                raise RuntimeError("分析管线已关闭")
+            task = self.store.get_task(task_id)
+            if task is None:
+                raise KeyError("任务不存在")
+            if task.status != "失败":
+                raise ValueError("仅失败任务可重试")
             runtime = self._runtime.get(task_id)
-        if runtime is not None and runtime.evidence is not None:
-            runtime.cancellation.clear()
-            self.temp_files.create(task_id)
-            changed = self._set_status(task, "分析中", "MODEL_RETRY_STARTED", "已重试风险分析")
-            def model_retry() -> None:
-                try:
-                    self._run_model(task_id, catalog)
-                finally:
-                    self._cleanup(task_id)
-            return self._submit(changed, runtime, model_retry)
-        chosen: Path | None
-        if source_path is not None:
-            chosen = self._safe_source(source_path)
-        elif runtime is not None and runtime.source is not None and runtime.source.exists():
-            chosen = self._safe_source(runtime.source)
-        else:
-            self._event(task_id, "失败", "RETRY_SOURCE_REQUIRED", "请重新选择原始文件")
-            raise ValueError("请重新选择原始文件")
-        if self._file_hash(chosen) != task.file_hash:
-            self._event(task_id, "失败", "RETRY_HASH_MISMATCH", "所选文件与原任务不一致")
-            raise ValueError("所选文件与原任务不一致")
-        runtime = runtime or _Runtime()
-        runtime.source = chosen
-        runtime.evidence = None
-        runtime.images.clear()
-        runtime.cancellation.clear()
-        with self._lock:
+            if runtime is not None and runtime.retry_in_progress:
+                raise ValueError("任务重试正在进行")
+            model_retry = runtime is not None and runtime.evidence is not None
+            chosen: Path | None = None
+            if not model_retry:
+                if source_path is None:
+                    self._event(task_id, "失败", "RETRY_SOURCE_REQUIRED", "请重新选择原始文件")
+                    raise ValueError("请重新选择原始文件")
+                chosen = self._safe_source(source_path)
+            runtime = runtime or _Runtime()
             self._runtime[task_id] = runtime
-        self.temp_files.create(task_id)
-        changed = self._set_status(task, "提取中", "EXTRACTION_RETRY_STARTED", "已重新开始提取")
-        return self._submit(changed, runtime, lambda: self._run_extraction(task_id, chosen, catalog))
+            runtime.retry_in_progress = True
+            runtime.cancellation.clear()
+            gate = threading.Event()
+            abort = threading.Event()
+
+            def gated(operation: Callable[[], None]) -> None:
+                gate.wait()
+                if not abort.is_set():
+                    operation()
+
+            try:
+                if model_retry:
+                    def model_operation() -> None:
+                        try:
+                            self._run_model(task_id, catalog)
+                        finally:
+                            self._cleanup(task_id)
+                            self._release_retry_reservation(task_id)
+                    future = self._executor.submit(lambda: gated(model_operation))
+                else:
+                    assert chosen is not None
+                    snapshot_holder: list[Path] = []
+                    def extraction_operation() -> None:
+                        self._run_extraction(task_id, snapshot_holder[0], catalog)
+                    future = self._executor.submit(lambda: gated(extraction_operation))
+            except Exception:
+                runtime.retry_in_progress = False
+                raise RuntimeError("分析管线已关闭") from None
+            runtime.future = future
+            try:
+                if model_retry:
+                    self.temp_files.create(task_id)
+                    changed = self._set_status(task, "分析中", "MODEL_RETRY_STARTED", "已重试风险分析")
+                else:
+                    assert chosen is not None
+                    snapshot, selected_hash = self._snapshot_source(chosen, task_id)
+                    if selected_hash != task.file_hash:
+                        abort.set()
+                        runtime.retry_in_progress = False
+                        self._cleanup(task_id)
+                        self._event(task_id, "失败", "RETRY_HASH_MISMATCH", "所选文件与原任务不一致")
+                        raise ValueError("所选文件与原任务不一致")
+                    snapshot_holder.append(snapshot)
+                    changed = self._set_status(task, "提取中", "EXTRACTION_RETRY_STARTED", "已重新开始提取")
+            except Exception:
+                abort.set()
+                runtime.retry_in_progress = False
+                gate.set()
+                self._cleanup(task_id)
+                raise
+            gate.set()
+            return changed
 
     def review_findings(self, task_id: str, edits: Iterable[FindingDraft | dict[str, Any]]) -> list[FindingDraft]:
         existing = {item.finding_id for item in self.store.list_findings(task_id)}

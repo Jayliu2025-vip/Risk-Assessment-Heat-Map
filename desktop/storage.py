@@ -137,6 +137,33 @@ class DesktopStore:
             connection.close()
         return checked
 
+    def commit_analysis_result(self, task: AnalysisTask, findings: Iterable[FindingDraft]) -> tuple[AnalysisTask, list[FindingDraft]]:
+        """Atomically publish a completed analysis task and its model findings."""
+        checked_task = AnalysisTask(**asdict(task))
+        if checked_task.status != "待复核":
+            raise ValidationError("分析结果任务状态必须为待复核")
+        checked_findings = [FindingDraft(**asdict(finding)) for finding in findings]
+        if any(finding.task_id != checked_task.task_id for finding in checked_findings):
+            raise ValidationError("finding task_id必须与任务一致")
+        finding_ids = [finding.finding_id for finding in checked_findings]
+        if len(finding_ids) != len(set(finding_ids)):
+            raise ValidationError("finding_id不得重复")
+        task_placeholders = ", ".join("?" for _ in _TASK_COLUMNS)
+        task_columns = ", ".join(_TASK_COLUMNS)
+        task_assignments = ", ".join(f"{column}=excluded.{column}" for column in _TASK_COLUMNS if column != "task_id")
+        finding_columns = ", ".join(_FINDING_COLUMNS)
+        finding_placeholders = ", ".join("?" for _ in _FINDING_COLUMNS)
+        finding_assignments = ", ".join(f"{column}=excluded.{column}" for column in _FINDING_COLUMNS if column not in {"task_id", "finding_id"})
+        connection = self._connect()
+        try:
+            with connection:
+                connection.execute(f"INSERT INTO analysis_tasks ({task_columns}) VALUES ({task_placeholders}) ON CONFLICT(task_id) DO UPDATE SET {task_assignments}", self._task_values(checked_task))
+                for finding in checked_findings:
+                    connection.execute(f"INSERT INTO findings ({finding_columns}) VALUES ({finding_placeholders}) ON CONFLICT(task_id, finding_id) DO UPDATE SET {finding_assignments}", self._finding_values(finding))
+        finally:
+            connection.close()
+        return checked_task, checked_findings
+
     def list_findings(self, task_id: str | None = None) -> list[FindingDraft]:
         columns = ", ".join(_FINDING_COLUMNS)
         connection = self._connect()

@@ -146,6 +146,22 @@ class DesktopStoreTests(unittest.TestCase):
         self.assertEqual(task.task_id, "T-worker")
         self.assertEqual([item.finding_id for item in findings], ["F-worker"])
 
+    def test_commit_analysis_result_rolls_back_task_and_all_findings_together(self):
+        store = self.make_store()
+        active = AnalysisTask("T-atomic", "report.pdf", "b" * 64, "2026-09-03T10:00:00Z", "分析中", "local", "text")
+        pending = AnalysisTask("T-atomic", "report.pdf", "b" * 64, "2026-09-03T10:00:00Z", "待复核", "local", "text")
+        store.save_task(active)
+        connection = sqlite3.connect(store.db_path)
+        try:
+            connection.execute("CREATE TRIGGER reject_atomic_finding BEFORE INSERT ON findings WHEN NEW.finding_id = 'F-bad' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(sqlite3.IntegrityError):
+            store.commit_analysis_result(pending, [self.finding("T-atomic", "F-good"), self.finding("T-atomic", "F-bad")])
+        self.assertEqual(asdict(store.get_task("T-atomic")), asdict(active))
+        self.assertEqual(store.list_findings("T-atomic"), [])
+
 
 if __name__ == "__main__":
     unittest.main()

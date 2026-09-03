@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import sqlite3
 import tempfile
@@ -98,10 +99,10 @@ class BlockingCompletionStore(TrackingStore):
         self.release_finding_write = threading.Event()
         super().__init__(path)
 
-    def save_findings(self, findings):
+    def commit_analysis_result(self, task, findings):
         self.finding_write_entered.set()
         self.release_finding_write.wait(2)
-        return super().save_findings(findings)
+        return super().commit_analysis_result(task, findings)
 
 
 class DuplicateLocatorExtractor(FakeExtractor):
@@ -121,6 +122,36 @@ class CountingTempFiles(TaskTempFiles):
     def create(self, task_id: str) -> Path:
         self.creates += 1
         return super().create(task_id)
+
+
+class SnapshotExtractor(FakeExtractor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_path: Path | None = None
+        self.seen_bytes: bytes | None = None
+
+    def __call__(self, path: Path, task_dir: Path) -> ExtractionResult:
+        self.calls += 1
+        self.seen_path = path
+        self.seen_bytes = path.read_bytes()
+        return ExtractionResult([ExtractedBlock("第 1 页", "snapshot evidence", "text")], "text")
+
+
+class OneShotCommitFailureStore(TrackingStore):
+    def __init__(self, path: Path) -> None:
+        self.fail_once = True
+        super().__init__(path)
+
+    def commit_analysis_result(self, task, findings):
+        if self.fail_once:
+            self.fail_once = False
+            raise sqlite3.OperationalError("synthetic atomic commit failure")
+        return super().commit_analysis_result(task, findings)
+
+
+class StartPersistenceFailureStore(TrackingStore):
+    def save_task(self, task):
+        raise sqlite3.OperationalError("synthetic start persistence failure")
 
 
 class PipelineTests(unittest.TestCase):
@@ -260,6 +291,91 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT count(*) FROM analysis_tasks").fetchone()[0], 0)
         finally:
             connection.close()
+
+    def test_concurrent_retry_reserves_one_worker_and_rejects_loser_without_reverting_state(self) -> None:
+        model = FakeModel(fail=True)
+        pipeline, extractor, _ = self.pipeline(model=model)
+        task = pipeline.start(self.source, "synthetic")
+        self.assertEqual(pipeline.wait(task.task_id, 2).status, "失败")
+        model.fail = False
+        model.release = threading.Event()
+        barrier = threading.Barrier(3)
+        outcomes: list[object] = []
+
+        def retry_once() -> None:
+            barrier.wait()
+            try:
+                outcomes.append(pipeline.retry(task.task_id))
+            except Exception as exc:
+                outcomes.append(exc)
+
+        callers = [threading.Thread(target=retry_once) for _ in range(2)]
+        for caller in callers:
+            caller.start()
+        barrier.wait()
+        for caller in callers:
+            caller.join(1)
+        self.assertEqual(sum(isinstance(outcome, ValueError) for outcome in outcomes), 1)
+        self.assertEqual(sum(hasattr(outcome, "task_id") for outcome in outcomes), 1)
+        self.assertEqual(extractor.calls, 1)
+        self.assertEqual(self.store.get_task(task.task_id).status, "分析中")
+        model.release.set()
+        self.assertEqual(pipeline.wait(task.task_id, 2).status, "待复核")
+
+    def test_retry_after_close_preserves_failed_task_events_temp_and_cache(self) -> None:
+        model = FakeModel(fail=True)
+        pipeline, _, _ = self.pipeline(model=model)
+        task = pipeline.start(self.source, "synthetic")
+        pipeline.wait(task.task_id, 2)
+        before = self.store.get_task(task.task_id)
+        events = pipeline.events(task.task_id)
+        runtime = pipeline._runtime[task.task_id]
+        evidence = runtime.evidence
+        images = list(runtime.images)
+        pipeline.close()
+        with self.assertRaises(RuntimeError):
+            pipeline.retry(task.task_id)
+        self.assertEqual(self.store.get_task(task.task_id), before)
+        self.assertEqual(pipeline.events(task.task_id), events)
+        self.assertFalse(self.tasks.task_dir(task.task_id).exists())
+        self.assertEqual(runtime.evidence, evidence)
+        self.assertEqual(runtime.images, images)
+
+    def test_worker_reads_per_task_snapshot_not_mutated_original_source(self) -> None:
+        executor = ThreadPoolExecutor(max_workers=1)
+        gate = threading.Event()
+        executor.submit(lambda: gate.wait(2))
+        extractor = SnapshotExtractor()
+        pipeline = AnalysisPipeline(self.store, self.tasks, extractor, FakeFactory(FakeModel()), lambda name: self.profile, lambda name: "secret-key", self.catalog, executor=executor)
+        self.addCleanup(pipeline.close)
+        self.addCleanup(lambda: executor.shutdown(wait=True))
+        original = self.source.read_bytes()
+        task = pipeline.start(self.source, "synthetic")
+        self.source.write_bytes(b"mutated after task start")
+        gate.set()
+        self.assertEqual(pipeline.wait(task.task_id, 2).status, "待复核")
+        self.assertEqual(extractor.seen_bytes, original)
+        self.assertEqual(extractor.seen_path.name, "source_snapshot.pdf")
+        self.assertEqual(hashlib.sha256(extractor.seen_bytes).hexdigest(), task.file_hash)
+        self.assertFalse(self.tasks.task_dir(task.task_id).exists())
+
+    def test_atomic_commit_failure_leaves_failed_task_without_findings(self) -> None:
+        store = OneShotCommitFailureStore(self.root / "commit-failure.sqlite3")
+        pipeline = AnalysisPipeline(store, self.tasks, FakeExtractor(), FakeFactory(FakeModel()), lambda name: self.profile, lambda name: "secret-key", self.catalog)
+        self.addCleanup(pipeline.close)
+        task = pipeline.start(self.source, "synthetic")
+        self.assertEqual(pipeline.wait(task.task_id, 2).status, "失败")
+        self.assertEqual(store.list_findings(task.task_id), [])
+        self.assertEqual(pipeline.events(task.task_id)[-1]["code"], "MODEL_FAILED")
+
+    def test_start_persistence_failure_cleans_snapshot_directory(self) -> None:
+        tasks = TaskTempFiles(self.root / "start-failure-temp")
+        store = StartPersistenceFailureStore(self.root / "start-failure.sqlite3")
+        pipeline = AnalysisPipeline(store, tasks, FakeExtractor(), FakeFactory(FakeModel()), lambda name: self.profile, lambda name: "secret-key", self.catalog)
+        self.addCleanup(pipeline.close)
+        with self.assertRaises(sqlite3.OperationalError):
+            pipeline.start(self.source, "synthetic")
+        self.assertEqual(list(tasks.root.iterdir()) if tasks.root.exists() else [], [])
 
     def test_cleanup_residue_is_safe_and_source_is_untouched(self) -> None:
         class FailingCleanup(TaskTempFiles):
