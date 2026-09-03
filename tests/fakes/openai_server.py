@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -91,6 +92,15 @@ class FakeOpenAIServer:
                         self.wfile.flush()
                     except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
                         return
+                    return
+                if owner.mode == "gzip":
+                    encoded = gzip.compress(b"{}")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Encoding", "gzip")
+                    self.send_header("Content-Length", str(len(encoded)))
+                    self.end_headers()
+                    self.wfile.write(encoded)
                     return
                 if owner.mode == "invalid_json":
                     self._json(200, "not-json", raw=True)

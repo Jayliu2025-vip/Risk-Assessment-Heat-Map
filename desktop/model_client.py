@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import re
 from collections.abc import Iterable, Mapping
@@ -41,6 +42,8 @@ _SAFE_MESSAGES = {
     "MODEL_RATE_LIMIT": "模型服务请求过于频繁，请稍后重试。",
     "MODEL_TIMEOUT": "模型服务响应超时，请稍后重试。",
     "MODEL_CONNECTION_FAILED": "无法连接模型服务，请检查模型地址和网络。",
+    "MODEL_URL_INSECURE": "模型服务地址不安全，请使用 HTTPS。",
+    "MODEL_RESPONSE_ENCODING_UNSUPPORTED": "模型服务返回了不支持的响应编码。",
     "MODEL_JSON_INVALID": "模型服务返回的 JSON 无法解析。",
     "MODEL_OUTPUT_INVALID": "模型返回内容不符合发现草案格式。",
     "MODEL_INPUT_TOO_LARGE": "分析输入超过安全限制。",
@@ -69,14 +72,26 @@ def normalize_endpoint(base_url: str) -> str:
         raise _error("MODEL_CONNECTION_FAILED")
     try:
         parsed = urlparse(base_url.strip())
+        hostname = parsed.hostname
         # Accessing port catches malformed port strings without revealing them.
         _ = parsed.port
     except ValueError:
         raise _error("MODEL_CONNECTION_FAILED") from None
-    if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username is not None
+    if (parsed.scheme not in ("http", "https") or not hostname or parsed.username is not None
             or parsed.password is not None or parsed.query or parsed.fragment or parsed.params
             or parsed.path not in ("", "/v1")):
         raise _error("MODEL_CONNECTION_FAILED")
+    if parsed.scheme == "http":
+        loopback = hostname.lower() == "localhost"
+        if not loopback:
+            try:
+                address = ipaddress.ip_address(hostname)
+                loopback = ((address.version == 4 and address in ipaddress.IPv4Network("127.0.0.0/8"))
+                            or address == ipaddress.IPv6Address("::1"))
+            except ValueError:
+                loopback = False
+        if not loopback:
+            raise _error("MODEL_URL_INSECURE")
     return urlunparse((parsed.scheme, parsed.netloc, "/v1/chat/completions", "", "", ""))
 
 
@@ -95,6 +110,19 @@ def _content_json(content: Any) -> dict[str, Any]:
     if not isinstance(parsed, dict) or set(parsed) != {"findings"} or not isinstance(parsed["findings"], list):
         raise _error("MODEL_OUTPUT_INVALID")
     return parsed
+
+
+def _locator_blocks(normalized_text: str) -> dict[str, str]:
+    """Index exact ``[locator]\ntext`` blocks for locator-scoped evidence checks."""
+    marker = re.compile(r"(?m)^\[([^\]\r\n]+)\]\r?\n")
+    matches = list(marker.finditer(normalized_text))
+    blocks: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(normalized_text)
+        locator = match.group(1)
+        block = normalized_text[match.end():end]
+        blocks[locator] = f"{blocks[locator]}\n{block}" if locator in blocks else block
+    return blocks
 
 
 def _known_risk_ids(risk_catalog: list[Any]) -> set[str]:
@@ -160,7 +188,7 @@ class ModelClient:
         return paths
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        headers = {"Authorization": f"Bearer {self._api_key}", "Accept-Encoding": "identity"}
         try:
             with self._client.stream("POST", self.endpoint, headers=headers, json=payload) as response:
                 if response.status_code in (401, 403):
@@ -169,6 +197,9 @@ class ModelClient:
                     raise _error("MODEL_RATE_LIMIT")
                 if response.status_code < 200 or response.status_code >= 300:
                     raise _error("MODEL_CONNECTION_FAILED")
+                encoding = response.headers.get("Content-Encoding")
+                if encoding is not None and encoding.strip().lower() != "identity":
+                    raise _error("MODEL_RESPONSE_ENCODING_UNSUPPORTED")
                 length = response.headers.get("Content-Length")
                 if length is not None:
                     try:
@@ -177,10 +208,10 @@ class ModelClient:
                     except ValueError:
                         raise _error("MODEL_JSON_INVALID") from None
                 body = bytearray()
-                for chunk in response.iter_bytes():
-                    body.extend(chunk)
-                    if len(body) > MAX_RESPONSE_BYTES:
+                for chunk in response.iter_raw(chunk_size=65536):
+                    if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
                         raise _error("MODEL_RESPONSE_TOO_LARGE")
+                    body.extend(chunk)
         except ModelError:
             raise
         except httpx.TimeoutException:
@@ -239,7 +270,7 @@ class ModelClient:
         known_ids = _known_risk_ids(risks)
         seen: set[str] = set()
         findings: list[FindingDraft] = []
-        normalized_evidence = "".join(normalized_text.split())
+        locator_blocks = _locator_blocks(normalized_text)
         try:
             for item in parsed["findings"]:
                 if not isinstance(item, Mapping) or set(item) != set(MODEL_FINDING_FIELDS):
@@ -248,7 +279,8 @@ class ModelClient:
                 if finding.finding_id in seen:
                     raise ValidationError("finding_id重复")
                 seen.add(finding.finding_id)
-                if "".join(finding.source_excerpt.split()) not in normalized_evidence:
+                block = locator_blocks.get(finding.source_page)
+                if block is None or "".join(finding.source_excerpt.split()) not in "".join(block.split()):
                     finding.needs_review = True
                 if images and not sent_vision:
                     finding.needs_review = True

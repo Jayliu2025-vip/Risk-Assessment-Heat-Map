@@ -55,12 +55,19 @@ class ModelClientTests(unittest.TestCase):
 
     def test_endpoint_normalization_and_rejections_are_exact(self):
         self.assertEqual(normalize_endpoint("https://localhost/v1"), "https://localhost/v1/chat/completions")
+        self.assertEqual(normalize_endpoint("http://localhost"), "http://localhost/v1/chat/completions")
         self.assertEqual(normalize_endpoint("http://127.0.0.1"), "http://127.0.0.1/v1/chat/completions")
+        self.assertEqual(normalize_endpoint("http://127.255.255.255/v1"), "http://127.255.255.255/v1/chat/completions")
+        self.assertEqual(normalize_endpoint("http://[::1]/v1"), "http://[::1]/v1/chat/completions")
         for url in ("ftp://localhost", "https://user:pass@localhost", "https://localhost/", "https://localhost/v1/x", "https://localhost?q=x", "https://localhost#x"):
             with self.assertRaises(ModelError) as raised:
                 normalize_endpoint(url)
             self.assertEqual(raised.exception.code, "MODEL_CONNECTION_FAILED")
             self.assertNotIn("pass", str(raised.exception))
+        for url in ("http://192.0.2.1", "http://10.0.0.1", "http://172.16.0.1", "http://[fd00::1]"):
+            with self.assertRaises(ModelError) as raised:
+                normalize_endpoint(url)
+            self.assertEqual(raised.exception.code, "MODEL_URL_INSECURE")
 
     def test_error_codes_for_transport_and_response_failures(self):
         cases = (("invalid_json", "MODEL_JSON_INVALID"), ("auth_failed", "MODEL_AUTH_FAILED"), ("rate_limit", "MODEL_RATE_LIMIT"), ("oversized_response", "MODEL_RESPONSE_TOO_LARGE"))
@@ -204,12 +211,46 @@ class ModelClientTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "MODEL_OUTPUT_INVALID")
 
     def test_streamed_response_without_content_length_is_bounded(self):
+        raw_sizes = []
+        original_iter_raw = httpx.Response.iter_raw
+
+        def capture_raw(response, *args, **kwargs):
+            self.assertEqual(kwargs.get("chunk_size"), 65536)
+            for chunk in original_iter_raw(response, *args, **kwargs):
+                raw_sizes.append(len(chunk))
+                yield chunk
+
         with FakeOpenAIServer(mode="streamed_oversized") as server:
-            with patch.object(model_client, "MAX_RESPONSE_BYTES", 8):
+            with patch.object(model_client, "MAX_RESPONSE_BYTES", 8), patch.object(httpx.Response, "iter_bytes", side_effect=AssertionError("decoded iteration")), patch.object(httpx.Response, "iter_raw", capture_raw):
                 with ModelClient(profile(server.base_url), "k") as client:
                     with self.assertRaises(ModelError) as raised:
                         client.analyze("T-1", "虚构付款审批记录", catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_RESPONSE_TOO_LARGE")
+        self.assertTrue(raw_sizes)
+        self.assertLessEqual(max(raw_sizes), 65536)
+
+    def test_encoded_response_is_rejected_before_decoding(self):
+        with FakeOpenAIServer(mode="gzip") as server:
+            with ModelClient(profile(server.base_url), "k") as client:
+                with self.assertRaises(ModelError) as raised:
+                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+        self.assertEqual(raised.exception.code, "MODEL_RESPONSE_ENCODING_UNSUPPORTED")
+
+    def test_locator_scoped_grounding_covers_pages_and_word(self):
+        def payload(source_page, source_excerpt):
+            return json.dumps({"findings": [{"finding_id": "F-locator", "title": "虚构", "fact_summary": "虚构", "source_page": source_page, "source_excerpt": source_excerpt, "matched_risk_id": "R003", "domain": "资金活动", "likelihood": 3, "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "虚构", "needs_review": False}]}, ensure_ascii=False)
+
+        cases = (
+            ("[page 1]\n真实原文", "page 99", "真实原文", True),
+            ("[page 1]\n真实原文", "page 2", "真实原文", True),
+            ("[page 1]\n真实  原文", "page 1", "真实原文", False),
+            ("[Word 段落 1]\n审批复核记录", "Word 段落 1", "审批复核记录", False),
+        )
+        for text, source_page, excerpt, expected in cases:
+            with self.subTest(source_page=source_page), FakeOpenAIServer(content=payload(source_page, excerpt)) as server:
+                with ModelClient(profile(server.base_url), "k") as client:
+                    findings = client.analyze("T-1", text, catalog(), [])
+            self.assertEqual(findings[0].needs_review, expected)
 
     def test_test_connection_requires_ok(self):
         with FakeOpenAIServer(content="OK") as server:
