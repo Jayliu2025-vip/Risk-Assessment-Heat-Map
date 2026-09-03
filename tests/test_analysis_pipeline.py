@@ -90,6 +90,39 @@ class TrackingStore(DesktopStore):
         return super().save_task(task)
 
 
+class BlockingCompletionStore(TrackingStore):
+    """Pauses exactly inside the worker's final findings write."""
+
+    def __init__(self, path: Path) -> None:
+        self.finding_write_entered = threading.Event()
+        self.release_finding_write = threading.Event()
+        super().__init__(path)
+
+    def save_findings(self, findings):
+        self.finding_write_entered.set()
+        self.release_finding_write.wait(2)
+        return super().save_findings(findings)
+
+
+class DuplicateLocatorExtractor(FakeExtractor):
+    def __call__(self, path: Path, task_dir: Path) -> ExtractionResult:
+        self.calls += 1
+        return ExtractionResult([
+            ExtractedBlock("第 1 页", "one", "text"),
+            ExtractedBlock("第 1 页", "two", "text"),
+        ], "text")
+
+
+class CountingTempFiles(TaskTempFiles):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.creates = 0
+
+    def create(self, task_id: str) -> Path:
+        self.creates += 1
+        return super().create(task_id)
+
+
 class PipelineTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -175,7 +208,7 @@ class PipelineTests(unittest.TestCase):
         pipeline, _, _ = self.pipeline(extractor=extractor)
         task = pipeline.start(self.source, "synthetic")
         extractor.entered.wait(1)
-        pipeline.cancel(task.task_id)
+        self.assertIs(pipeline.cancel(task.task_id), True)
         held.set()
         self.assertEqual(pipeline.wait(task.task_id, 2).status, "失败")
         self.assertEqual(pipeline.events(task.task_id)[-1]["code"], "TASK_CANCELLED")
@@ -185,11 +218,48 @@ class PipelineTests(unittest.TestCase):
         after, _, _ = self.pipeline(model=model)
         late = after.start(self.source, "synthetic")
         self.assertTrue(model.entered.wait(1))
-        after.cancel(late.task_id)
+        self.assertIs(after.cancel(late.task_id), True)
         model_release.set()
         self.assertEqual(after.wait(late.task_id, 2).status, "失败")
         self.assertEqual(after.events(late.task_id)[-1]["code"], "TASK_CANCELLED")
         self.assertEqual(self.store.list_findings(late.task_id), [])
+
+    def test_final_findings_commit_and_cancel_are_linearized(self) -> None:
+        store = BlockingCompletionStore(self.root / "atomic.sqlite3")
+        pipeline = AnalysisPipeline(store, self.tasks, FakeExtractor(), FakeFactory(FakeModel()), lambda name: self.profile, lambda name: "secret-key", self.catalog)
+        self.addCleanup(pipeline.close)
+        task = pipeline.start(self.source, "synthetic")
+        self.assertTrue(store.finding_write_entered.wait(1))
+        outcome: list[bool] = []
+        cancelling = threading.Thread(target=lambda: outcome.append(pipeline.cancel(task.task_id)))
+        cancelling.start()
+        self.assertTrue(cancelling.is_alive())
+        store.release_finding_write.set()
+        self.assertEqual(pipeline.wait(task.task_id, 2).status, "待复核")
+        cancelling.join(1)
+        self.assertEqual(outcome, [False])
+        self.assertEqual(len(store.list_findings(task.task_id)), 3)
+        self.assertNotIn("TASK_CANCELLED", [event["code"] for event in pipeline.events(task.task_id)])
+
+    def test_evidence_serialization_failure_is_sanitized_and_worker_does_not_escape(self) -> None:
+        pipeline, _, _ = self.pipeline(extractor=DuplicateLocatorExtractor())
+        task = pipeline.start(self.source, "synthetic")
+        self.assertEqual(pipeline.wait(task.task_id, 2).status, "失败")
+        self.assertEqual(pipeline.events(task.task_id)[-1]["code"], "MODEL_INPUT_INVALID")
+        self.assertFalse(self.tasks.task_dir(task.task_id).exists())
+
+    def test_start_after_close_does_not_persist_or_create_temp_files(self) -> None:
+        tasks = CountingTempFiles(self.root / "closed-temp")
+        pipeline = AnalysisPipeline(self.store, tasks, FakeExtractor(), FakeFactory(FakeModel()), lambda name: self.profile, lambda name: "secret-key", self.catalog)
+        pipeline.close()
+        with self.assertRaises(RuntimeError):
+            pipeline.start(self.source, "synthetic")
+        self.assertEqual(tasks.creates, 0)
+        connection = sqlite3.connect(self.root / "state.sqlite3")
+        try:
+            self.assertEqual(connection.execute("SELECT count(*) FROM analysis_tasks").fetchone()[0], 0)
+        finally:
+            connection.close()
 
     def test_cleanup_residue_is_safe_and_source_is_untouched(self) -> None:
         class FailingCleanup(TaskTempFiles):

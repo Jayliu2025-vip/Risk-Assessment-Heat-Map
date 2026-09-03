@@ -152,21 +152,27 @@ class AnalysisPipeline:
         return task
 
     def start(self, source_path: Path | str, model_profile: str, risk_catalog: Iterable[Any] | None = None) -> AnalysisTask:
-        source = self._safe_source(source_path)
-        profile = self.profile_resolver(model_profile)
-        if not isinstance(profile, ModelProfile):
-            raise ValidationError("模型配置不可用")
-        task_id = str(self.uuid_factory())
-        task = AnalysisTask(task_id, source.name, self._file_hash(source), self._now(), "提取中", profile.name, "pending")
-        # Task metadata exists before a worker is accepted.  No source path is sent to SQLite.
-        self.store.save_task(task)
-        self._event(task_id, "提取中", "TASK_STARTED", "已开始提取")
-        runtime = _Runtime(source=source)
         with self._lock:
+            # Keep the closed check, initial persistence, temp creation and
+            # submission in one reservation. close() cannot leave a persisted
+            # task without a corresponding worker between these operations.
+            if self._closed:
+                raise RuntimeError("分析管线已关闭")
+            source = self._safe_source(source_path)
+            profile = self.profile_resolver(model_profile)
+            if not isinstance(profile, ModelProfile):
+                raise ValidationError("模型配置不可用")
+            task_id = str(self.uuid_factory())
+            task = AnalysisTask(task_id, source.name, self._file_hash(source), self._now(), "提取中", profile.name, "pending")
+            # Task metadata exists before a worker is accepted.  No source path is sent to SQLite.
+            self.store.save_task(task)
+            self._event(task_id, "提取中", "TASK_STARTED", "已开始提取")
+            runtime = _Runtime(source=source)
             self._runtime[task_id] = runtime
-        self.temp_files.create(task_id)
-        catalog = list(risk_catalog) if risk_catalog is not None else self.risk_catalog
-        return self._submit(task, runtime, lambda: self._run_extraction(task_id, source, catalog))
+            self.temp_files.create(task_id)
+            catalog = list(risk_catalog) if risk_catalog is not None else self.risk_catalog
+            runtime.future = self._executor.submit(lambda: self._run_extraction(task_id, source, catalog))
+            return task
 
     def wait(self, task_id: str, timeout: float | None = None) -> AnalysisTask:
         with self._lock:
@@ -198,17 +204,21 @@ class AnalysisPipeline:
         if task is not None and task.status != "失败":
             self._set_status(task, "失败", "TASK_CANCELLED", "任务已取消")
 
-    def cancel(self, task_id: str) -> AnalysisTask:
+    def cancel(self, task_id: str) -> bool:
         with self._lock:
             runtime = self._runtime.get(task_id)
             if runtime is None:
                 raise KeyError("任务不存在")
+            task = self.store.get_task(task_id)
+            if task is None:
+                raise KeyError("任务不存在")
+            # A task in final persistence/completion holds this same lock. Once
+            # it releases with a terminal successful state, cancellation loses.
+            if task.status in ("待复核", "已完成", "失败"):
+                return False
             runtime.cancellation.set()
-        self._cancel_failure(task_id)
-        task = self.store.get_task(task_id)
-        if task is None:
-            raise KeyError("任务不存在")
-        return task
+            self._cancel_failure(task_id)
+            return True
 
     def _extraction_failure(self, task_id: str, exc: Exception) -> None:
         if self._cancelled(task_id):
@@ -282,8 +292,8 @@ class AnalysisPipeline:
             task = AnalysisTask(task.task_id, task.file_name, task.file_hash, task.created_at, task.status, task.model_profile, result.method)
             self.store.save_task(task)
             task = self._set_status(task, "分析中", "EXTRACTION_COMPLETED", "报告提取完成")
-            evidence = serialize_evidence_blocks(result.blocks)
             try:
+                evidence = serialize_evidence_blocks(result.blocks)
                 images = self._cache_images(task_id, result, task_dir)
             except Exception as exc:
                 self._model_failure(task_id, exc)
@@ -339,18 +349,19 @@ class AnalysisPipeline:
                 raise ValueError("model configuration unavailable")
             images = self._temporary_images(task_id, cached)
             response = self._call_model(profile, credential, task_id, evidence, catalog, images)
-            if self._cancelled(task_id):
-                self._cancel_failure(task_id)
-                return
             findings = self._validated_findings(task_id, response)
-            if self._cancelled(task_id):
-                self._cancel_failure(task_id)
-                return
-            self.store.save_findings(findings)
-            task = self.store.get_task(task_id)
-            if task is not None:
-                self._set_status(task, "待复核", "ANALYSIS_COMPLETED", "风险分析完成")
             with self._lock:
+                # This is deliberately a single linearization section with
+                # cancel(): cancellation either wins before this check (and no
+                # finding can be written), or completion wins as one unit.
+                runtime = self._runtime.get(task_id)
+                if runtime is None or runtime.cancellation.is_set():
+                    self._cancel_failure(task_id)
+                    return
+                self.store.save_findings(findings)
+                task = self.store.get_task(task_id)
+                if task is not None:
+                    self._set_status(task, "待复核", "ANALYSIS_COMPLETED", "风险分析完成")
                 runtime = self._runtime.get(task_id)
                 if runtime is not None:
                     runtime.evidence = None
