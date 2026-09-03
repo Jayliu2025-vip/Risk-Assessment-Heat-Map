@@ -4,24 +4,25 @@ test.describe('synthetic desktop audit report workflow', () => {
   test('desktop workflow commits reviewed synthetic findings into the existing heatmap', async ({ page }) => {
     await page.addInitScript(() => {
       const dims = ['imp_financial','imp_compliance','imp_operation','imp_reputation','imp_fraud','imp_strategy','imp_data','imp_hse'];
+      const domains = ['战略与投资','治理与决策','资金活动','财务报告与税务','资产管理','采购与外包','合同管理','工程项目','人力资源','信息系统','合规与法律','安全环保'];
       const finding = (id, title) => ({ finding_id:id, title, fact_summary:'合成事实', source_page:'第 1 页', source_excerpt:'合成摘录', matched_risk_id:'R001', domain:'采购与外包', likelihood:3, impact_scores:Object.fromEntries(dims.map(d => [d, 2])), rationale:'合成依据', needs_review:true, review_status:'待确认' });
       let findings = [finding('F-1','第一项'), finding('F-2','第二项'), finding('F-3','第三项')];
       let poll = 0;
       window.__desktopPollCount = () => poll;
       window.pywebview = { api: {
-        get_bootstrap: async () => ({ profiles:[{name:'合成模型',base_url:'https://model.example.test',model:'synthetic',supports_vision:false}], domains:['采购与外包'] }),
+        get_bootstrap: async () => ({ profiles:[{name:'合成模型',base_url:'https://model.example.test',model:'synthetic',supports_vision:false}], domains }),
         choose_report: async purpose => ({ selection_token: purpose === 'workbook' ? 'book' : 'report', basename: purpose === 'workbook' ? 'synthetic.xlsx' : 'synthetic.pdf' }),
         save_model_profile: async ({ name, base_url, model, supports_vision }) => ({ profile:{ name, base_url, model, supports_vision } }),
         test_model_profile: async () => ({ hostname:'model.example.test' }),
         start_analysis: async () => ({ task:{task_id:'T-1',status:'提取中',extraction_method:'text'} }),
         get_task: async () => ({ task:{task_id:'T-1',status: ++poll < 2 ? '分析中' : '待复核', extraction_method:'text'} }),
         get_findings: async () => ({ findings }),
-        get_source_preview: async () => ({ kind:'text',source_page:'第 1 页',source_excerpt:'合成摘录' }),
+        get_source_preview: async (_task, id) => id === 'F-2' ? ({ kind:'pdf',source_page:'第 2 页',image_data_url:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlVw5sAAAAASUVORK5CYII=' }) : ({ kind:'text',source_page:'第 1 页',source_excerpt:'合成摘录' }),
         save_finding: async (_task, id, payload) => { findings = findings.map(item => item.finding_id === id ? {...payload, finding_id:id} : item); return { finding: findings.find(item => item.finding_id === id) }; },
-        merge_findings: async (_task, ids, payload) => { findings = findings.map(item => item.finding_id === ids[1] ? {...item,review_status:'已排除'} : item.finding_id === ids[0] ? {...payload,finding_id:ids[0]} : item); return {findings}; },
-        split_finding: async () => ({findings}),
-        preview_commit: async () => ({commit_token:'once',new_risks:[{risk_id:'R900'}],updated_risks:[],control_replacements:[],excluded_findings:['F-3'],warnings:[],period:'2026H2'}),
-        commit_to_workbook: async () => ({workbook_path:'C:/synthetic/out.xlsx',periods:['2026H2'],assessed_risks:[{risk_id:'R900',name:'确认风险',domain:'采购与外包',description:'合成描述',owner_dept:'审计部',period:'2026H2',likelihood:3,...Object.fromEntries(dims.map(d => [d, 2])),rationale:'合成依据'}],controls:[]})
+        merge_findings: async (_task, ids, payload) => { const changed = []; findings = findings.map(item => { const next = item.finding_id === ids[1] ? {...item,review_status:'已排除'} : item.finding_id === ids[0] ? {...payload,finding_id:ids[0]} : item; if(ids.includes(item.finding_id)) changed.push(next); return next; }); return {findings:changed}; },
+        split_finding: async (_task, id, payloads) => ({findings:[{...findings.find(item => item.finding_id === id),review_status:'已排除'},...payloads]}),
+        preview_commit: async (_task, _book, selectedPeriod, decisions) => { const included = decisions.filter(item => item.action !== 'exclude').flatMap(item => item.finding_ids); if(findings.some(item => included.includes(item.finding_id) && item.review_status !== '已接受')) throw {code:'PENDING_REVIEW'}; if(selectedPeriod !== '2026H2' || decisions.some(item => item.action !== 'exclude' && (item.period !== selectedPeriod || item.domain !== '信息系统'))) throw {code:'STALE'}; return {commit_token:'once',new_risks:[{risk_id:'R900'}],updated_risks:[],new_controls:[],excluded_count:2,warnings:[]}; },
+        commit_to_workbook: async (_task, _book, selectedPeriod) => ({workbook_path:'C:/synthetic/out.xlsx',export_dir:'C:/synthetic/export',period_data:{period:selectedPeriod,risks:[{risk_id:'R900',name:'确认风险',domain:'信息系统',description:'合成描述',owner_dept:'审计部',period:selectedPeriod,likelihood:3,...Object.fromEntries(dims.map(d => [d, 2])),rationale:'合成依据'}],controls:[]}})
       }};
     });
     await page.goto('file://' + process.cwd().replace(/\\/g, '/') + '/web/risk_heatmap.html');
@@ -35,6 +36,7 @@ test.describe('synthetic desktop audit report workflow', () => {
     await page.getByRole('button', { name:'开始本地提取' }).click();
     await expect(page.locator('#report-step-review')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('[data-finding-id]')).toHaveCount(3);
+    await expect(page.locator('[data-finding-field="domain"] option')).toHaveCount(12);
     const terminalPollCount = await page.evaluate(() => window.__desktopPollCount());
     await page.waitForTimeout(900);
     expect(await page.evaluate(() => window.__desktopPollCount())).toBe(terminalPollCount);
@@ -42,9 +44,16 @@ test.describe('synthetic desktop audit report workflow', () => {
     await page.screenshot({ path:'output/playwright/desktop-1440x920.png' });
     await page.locator('[data-finding-id="F-1"]').click();
     await page.locator('[data-finding-field="title"]').fill('已编辑第一项');
+    await page.locator('[data-finding-field="domain"]').selectOption('信息系统');
     await page.getByRole('button', { name:'保存发现' }).click();
+    await page.getByRole('button', { name:'接受' }).click();
+    await page.locator('[data-finding-id="F-2"]').click();
+    await expect(page.locator('#report-source-viewer img')).toHaveAttribute('alt', '来源页 第 2 页');
+    await page.locator('[data-finding-id="F-1"]').click();
+    await expect(page.locator('#report-source-viewer')).toContainText('合成摘录');
     await page.locator('[data-finding-id="F-2"]').click({ modifiers:['Control'] });
     await page.getByRole('button', { name:'合并所选' }).click();
+    await expect(page.locator('[data-finding-id]')).toHaveCount(3);
     await page.locator('[data-finding-id="F-3"]').click();
     await page.getByRole('button', { name:'排除', exact:true }).click();
     await page.getByRole('button', { name:'进入风险评估' }).click();

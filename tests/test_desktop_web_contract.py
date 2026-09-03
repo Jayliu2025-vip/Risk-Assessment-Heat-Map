@@ -48,6 +48,16 @@ class DesktopWebContractTests(unittest.TestCase):
         self.assertIn('<link rel="stylesheet" href="desktop_report.css">', self.html)
         self.assertIn('const APP_VERSION = "1.2";', self.html)
 
+    def test_desktop_script_consumes_production_bridge_shapes(self) -> None:
+        for marker in (
+            "period_data.period", "period_data.risks", "period_data.controls",
+            "patchFindings", "bootstrap?.domains", "image_data_url", "new_controls",
+            "excluded_count", "new_risks", "updated_risks", "warnings",
+        ):
+            self.assertIn(marker, self.script)
+        for stale_marker in ("assessed_risks||result.risks", "control_replacements", "excluded_findings"):
+            self.assertNotIn(stale_marker, self.script)
+
     def test_playwright_package_contract_is_pinned(self) -> None:
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
         self.assertTrue(package["private"])

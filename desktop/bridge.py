@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 from .extraction import ExtractionError, MAX_PDF_PAGES, MAX_RENDER_PIXELS, MAX_SOURCE_BYTES, PDF_RENDER_SCALE
 from .model_client import ModelError
 from .models import ConfirmedControl, FindingDraft, ModelProfile, RiskDecision, ValidationError
+from tools.common import load_dataset
 
 
 _PAGE = re.compile(r"^第 ([1-9][0-9]*) 页$")
@@ -99,7 +100,7 @@ class DesktopBridge:
         self._window: Any | None = None
         self._selections: dict[str, tuple[Path, str]] = {}
         self._task_sources: dict[str, tuple[Path, str]] = {}
-        self._commit_previews: dict[str, tuple[str, str, tuple[RiskDecision, ...]]] = {}
+        self._commit_previews: dict[str, tuple[str, str, str, tuple[RiskDecision, ...]]] = {}
         self._profile_lock = profile_lock or threading.RLock()
         self._task_locks: dict[str, threading.RLock] = {}
         self._task_locks_guard = threading.Lock()
@@ -175,6 +176,15 @@ class DesktopBridge:
             payload["controls"] = tuple(control if isinstance(control, ConfirmedControl) else ConfirmedControl(**control) for control in controls)
             result.append(RiskDecision(**payload))
         return tuple(result)
+
+    @staticmethod
+    def _decision_period(period: Any, decisions: tuple[RiskDecision, ...]) -> str:
+        if not isinstance(period, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", period) is None:
+            raise ValidationError("评估期间格式无效")
+        decision_periods = {item.period for item in decisions if item.action != "exclude"}
+        if decision_periods != {period}:
+            raise ValidationError("提交决策必须且只能对应当前评估期间")
+        return period
 
     def _render_pdf_page(self, path: Path, page_number: int) -> bytes:
         import pypdfium2
@@ -381,29 +391,32 @@ class DesktopBridge:
         return {"findings": [asdict(item) for item in saved]}
 
     @_public
-    def preview_commit(self, task_id: Any, workbook_selection_token: Any, decisions: Any) -> dict[str, Any]:
+    def preview_commit(self, task_id: Any, workbook_selection_token: Any, period: Any, decisions: Any) -> dict[str, Any]:
         with self._task_lock(task_id):
             source = self._selection(workbook_selection_token, "workbook")
             checked = self._decisions(decisions)
+            checked_period = self._decision_period(period, checked)
             findings = tuple(self._store.list_findings(task_id))
             preview = dict(self._workbook_writer.preview_changes(source, checked, findings))
             token = preview.get("commit_token")
             if not isinstance(token, str) or not token: raise _BridgeError("PREVIEW_INVALID", "提交预览无效")
-            self._commit_previews[str(workbook_selection_token)] = (str(task_id), token, checked)
+            self._commit_previews[str(workbook_selection_token)] = (str(task_id), checked_period, token, checked)
         return preview
 
     @_public
-    def commit_to_workbook(self, task_id: Any, workbook_selection_token: Any, decisions: Any, expected_commit_token: Any) -> dict[str, Any]:
+    def commit_to_workbook(self, task_id: Any, workbook_selection_token: Any, period: Any, decisions: Any, expected_commit_token: Any) -> dict[str, Any]:
         with self._task_lock(task_id):
             source = self._selection(workbook_selection_token, "workbook")
             checked = self._decisions(decisions)
+            checked_period = self._decision_period(period, checked)
             remembered = self._commit_previews.get(str(workbook_selection_token))
-            if remembered is None or remembered != (str(task_id), expected_commit_token, checked):
+            if remembered is None or remembered != (str(task_id), checked_period, expected_commit_token, checked):
                 raise _BridgeError("PREVIEW_REQUIRED", "请重新生成提交预览")
             self._commit_previews.pop(str(workbook_selection_token), None)
             result = self._workbook_writer.write_versioned_workbook(source, checked, tuple(self._store.list_findings(task_id)), expected_commit_token=expected_commit_token)
+            _, risks, controls = load_dataset(result.export_dir / checked_period, result.export_dir / "config.json")
         return {"workbook_path": str(result.workbook_path), "export_dir": str(result.export_dir),
-                "periods": list(result.periods), "assessed_risks": list(result.assessed_risks)}
+                "period_data": {"period": checked_period, "risks": risks, "controls": controls}}
 
     @_public
     def cleanup_task(self, task_id: Any) -> dict[str, Any]:

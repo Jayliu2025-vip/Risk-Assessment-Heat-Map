@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from desktop.models import AnalysisTask, FindingDraft, ModelProfile
 from desktop.storage import DesktopStore
@@ -68,7 +69,8 @@ class Writer:
     def __init__(self): self.preview_calls, self.commit_calls = [], []
     def preview_changes(self, source, decisions, findings):
         self.preview_calls.append((Path(source), decisions, findings))
-        return {"commit_token": "token-1", "new_risks": [], "periods": ["2026H1"]}
+        return {"commit_token": "token-1", "new_risks": [], "updated_risks": [],
+                "new_controls": [], "excluded_count": 0, "warnings": []}
     def write_versioned_workbook(self, source, decisions, findings, *, expected_commit_token):
         self.commit_calls.append((Path(source), decisions, findings, expected_commit_token))
         return type("Result", (), {"workbook_path": Path("C:/synthetic/out.xlsx"), "export_dir": Path("C:/synthetic/export"), "periods": ["2026H1"], "assessed_risks": [{"risk_id": "R001"}]})()
@@ -116,6 +118,12 @@ class DesktopBridgeTests(unittest.TestCase):
         source = source or self.report
         self.store.save_task(AnalysisTask(task_id, source.name, digest(source), "2026-09-03T00:00:00Z", "待复核", "synthetic", "text"))
         self.store.save_findings([finding(task_id)])
+
+    def create_decision(self, finding_id="F-1", period="2026H1"):
+        return {"action": "create", "finding_ids": [finding_id], "risk_id": "",
+                "name": "合成风险", "domain": "采购与外包", "description": "合成事实",
+                "owner_dept": "审计部", "period": period, "likelihood": 3,
+                "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "合成依据", "controls": []}
 
     def test_exact_js_public_allowlist(self):
         actual = {name for name, value in inspect.getmembers(type(self.bridge), inspect.isfunction) if not name.startswith("_")}
@@ -219,11 +227,12 @@ class DesktopBridgeTests(unittest.TestCase):
         finally:
             self.bridge._preview_slots.release()
         selected = self.select(self.workbook, "workbook")
-        decision = [{"action": "exclude", "finding_ids": ["F-1"]}]
-        preview = self.bridge.preview_commit("T-1", selected["selection_token"], decision)
-        first = self.bridge.commit_to_workbook("T-1", selected["selection_token"], decision, preview["commit_token"])
+        decision = [self.create_decision()]
+        preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", decision)
+        with patch("desktop.bridge.load_dataset", return_value=({}, [{"risk_id": "R001", "name": "合成风险", "domain": "采购与外包", "description": "合成事实", "owner_dept": "审计部", "period": "2026H1", "likelihood": 3, **{dim: 2 for dim in DIMS}, "rationale": "合成依据"}], [])):
+            first = self.bridge.commit_to_workbook("T-1", selected["selection_token"], "2026H1", decision, preview["commit_token"])
         self.assertTrue(first["ok"])
-        second = self.bridge.commit_to_workbook("T-1", selected["selection_token"], decision, preview["commit_token"])
+        second = self.bridge.commit_to_workbook("T-1", selected["selection_token"], "2026H1", decision, preview["commit_token"])
         self.assertEqual(second["code"], "PREVIEW_REQUIRED")
         self.assertEqual(len(self.writer.commit_calls), 1)
 
@@ -307,14 +316,17 @@ class DesktopBridgeTests(unittest.TestCase):
     def test_preview_and_commit_bind_selection_token_and_return_output_paths(self):
         self.seed_task()
         selected = self.select(self.workbook, "workbook")
-        decision = {"action": "exclude", "finding_ids": ["F-1"]}
-        preview = self.bridge.preview_commit("T-1", selected["selection_token"], [decision])
+        decision = self.create_decision()
+        preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", [decision])
         self.assertEqual(preview["commit_token"], "token-1")
-        bad = self.bridge.commit_to_workbook("T-1", selected["selection_token"], [decision], "wrong")
+        bad = self.bridge.commit_to_workbook("T-1", selected["selection_token"], "2026H1", [decision], "wrong")
         self.assertEqual(bad["code"], "PREVIEW_REQUIRED")
-        done = self.bridge.commit_to_workbook("T-1", selected["selection_token"], [decision], "token-1")
+        period_risk = {"risk_id": "R001", "name": "合成风险", "domain": "采购与外包", "description": "合成事实", "owner_dept": "审计部", "period": "2026H1", "likelihood": 3, **{dim: 2 for dim in DIMS}, "rationale": "合成依据"}
+        with patch("desktop.bridge.load_dataset", return_value=({}, [period_risk], [])):
+            done = self.bridge.commit_to_workbook("T-1", selected["selection_token"], "2026H1", [decision], "token-1")
         self.assertEqual(done["workbook_path"], str(Path("C:/synthetic/out.xlsx")))
         self.assertEqual(done["export_dir"], str(Path("C:/synthetic/export")))
+        self.assertEqual(done["period_data"], {"period": "2026H1", "risks": [period_risk], "controls": []})
 
     def test_cleanup_only_forgets_runtime_mappings(self):
         self.seed_task()
@@ -336,9 +348,9 @@ class DesktopBridgeTests(unittest.TestCase):
         first_book = self.select(self.workbook, "workbook")["selection_token"]
         second_book_file = self.root / "second.xlsx"; second_book_file.write_bytes(b"second synthetic workbook")
         second_book = self.select(second_book_file, "workbook")["selection_token"]
-        decision = [{"action": "exclude", "finding_ids": ["F-1"]}]
-        self.bridge.preview_commit("T-1", first_book, decision)
-        self.bridge.preview_commit("T-2", second_book, decision)
+        decision = [self.create_decision()]
+        self.bridge.preview_commit("T-1", first_book, "2026H1", decision)
+        self.bridge.preview_commit("T-2", second_book, "2026H1", decision)
         cleaned = self.bridge.cleanup_task("T-1")
         self.assertTrue(cleaned["ok"])
         self.assertEqual(self.pipeline.cleaned, ["T-1"])
@@ -350,6 +362,31 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertIn(report_two, self.bridge._selections)
         self.assertIn(second_book, self.bridge._selections)
         self.assertIn(second_book, self.bridge._commit_previews)
+
+    def test_real_bridge_response_keys_match_desktop_script_contract(self):
+        self.seed_task()
+        self.store.save_findings([finding("T-1", "F-2")])
+        merged = self.bridge.merge_findings("T-1", ["F-1", "F-2"], asdict(finding("T-1", "F-1", review_status="已接受")))
+        self.assertEqual(set(merged) - {"ok"}, {"findings"})
+        self.assertEqual({item["finding_id"] for item in merged["findings"]}, {"F-1", "F-2"})
+        split = self.bridge.split_finding("T-1", "F-1", [asdict(finding("T-1", "F-1-A")), asdict(finding("T-1", "F-1-B"))])
+        self.assertEqual(set(split) - {"ok"}, {"findings"})
+        self.assertEqual({item["finding_id"] for item in split["findings"]}, {"F-1", "F-1-A", "F-1-B"})
+        selected = self.select(self.workbook, "workbook")
+        decision = [self.create_decision("F-1-A")]
+        preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", decision)
+        self.assertEqual(set(preview) - {"ok"}, {"commit_token", "new_risks", "updated_risks", "new_controls", "excluded_count", "warnings"})
+        risk = {"risk_id": "R001", "name": "合成风险", "domain": "采购与外包", "description": "合成事实", "owner_dept": "审计部", "period": "2026H1", "likelihood": 3, **{dim: 2 for dim in DIMS}, "rationale": "合成依据"}
+        with patch("desktop.bridge.load_dataset", return_value=({}, [risk], [])):
+            committed = self.bridge.commit_to_workbook("T-1", selected["selection_token"], "2026H1", decision, preview["commit_token"])
+        self.assertEqual(set(committed) - {"ok"}, {"workbook_path", "export_dir", "period_data"})
+
+    def test_preview_rejects_decisions_outside_the_selected_period(self):
+        self.seed_task()
+        selected = self.select(self.workbook, "workbook")
+        wrong_period = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", [self.create_decision(period="2026H2")])
+        self.assertFalse(wrong_period["ok"])
+        self.assertEqual(self.writer.preview_calls, [])
 
 
 class AppBootstrapTests(unittest.TestCase):
