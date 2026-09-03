@@ -10,9 +10,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
+import json
 import os
 import re
 import shutil
+import tempfile
 from typing import Iterable
 from copy import copy
 
@@ -20,7 +22,7 @@ from openpyxl import load_workbook
 
 from desktop.models import FindingDraft, RiskDecision, ValidationError
 from tools.common import DIMS, DOMAINS, assess_all, load_dataset
-from tools.export_from_excel import export_workbook
+from tools.export_from_excel import export_workbook, validate_period
 
 
 RISK_SHEET = "风险登记册"
@@ -97,7 +99,11 @@ def _risk_records(ws) -> tuple[list[dict], dict[tuple[str, str], int], set[str]]
         if not risk_id:
             continue
         period = _clean_text(ws.cell(row, 6).value)
-        if not RISK_ID_RE.fullmatch(risk_id) or not period or _clean_text(ws.cell(row, 3).value) not in DOMAINS:
+        try:
+            period = validate_period(period)
+        except ValueError as exc:
+            raise ValidationError("工作簿风险编号或期间格式无效") from exc
+        if not RISK_ID_RE.fullmatch(risk_id) or _clean_text(ws.cell(row, 3).value) not in DOMAINS:
             raise ValidationError("工作簿风险编号或期间格式无效")
         key = (risk_id, period)
         if key in by_key:
@@ -140,13 +146,17 @@ def _control_records(ws, limit: int) -> list[dict]:
             continue
         control_id, risk_id, period, description, score, key = values
         control_id = _clean_text(control_id)
+        try:
+            period = validate_period(_clean_text(period))
+        except ValueError as exc:
+            raise ValidationError("工作簿控制点录入值无效") from exc
         if (not CONTROL_ID_RE.fullmatch(control_id) or control_id in ids or
-                not RISK_ID_RE.fullmatch(_clean_text(risk_id)) or not _clean_text(period) or
+                not RISK_ID_RE.fullmatch(_clean_text(risk_id)) or
                 not _clean_text(description) or not isinstance(score, int) or not 1 <= score <= 5):
             raise ValidationError("工作簿控制点录入值无效")
         ids.add(control_id)
         records.append({"control_id": control_id, "risk_id": _clean_text(risk_id),
-                        "period": _clean_text(period), "description": _clean_text(description),
+                        "period": period, "description": _clean_text(description),
                         "score": score, "key": "是" if _clean_text(key) in ("是", "1", "true", "True") else "否"})
     return records
 
@@ -187,8 +197,12 @@ def _validate_findings(decisions: tuple[RiskDecision, ...], findings: tuple[Find
 
 def _decision_values(decision: RiskDecision, risk_id: str) -> list[object]:
     scores = decision.impact_scores or {}
+    try:
+        period = validate_period(decision.period)
+    except ValueError as exc:
+        raise ValidationError("评估期间格式无效") from exc
     values = [risk_id, decision.name, decision.domain, decision.description, decision.owner_dept,
-              decision.period, decision.likelihood] + [scores.get(dim) for dim in DIMS]
+              period, decision.likelihood] + [scores.get(dim) for dim in DIMS]
     if not any(value is not None for value in values[7:15]):
         raise ValidationError("至少需要一个影响维度评分")
     return values + [decision.rationale]
@@ -198,6 +212,9 @@ def _prepare(source: Path, decisions: Iterable[RiskDecision], findings: Iterable
     decisions = tuple(decisions)
     findings = tuple(findings)
     _validate_findings(decisions, findings)
+    for decision in decisions:
+        if decision.action != "exclude":
+            _decision_values(decision, decision.risk_id or "R001")
     workbook = _open_checked(source)
     risks_ws, controls_ws = workbook[RISK_SHEET], workbook[CONTROL_SHEET]
     risks, by_key, risk_ids = _risk_records(risks_ws)
@@ -217,9 +234,10 @@ def _prepare(source: Path, decisions: Iterable[RiskDecision], findings: Iterable
         if decision.action == "exclude":
             continue
         if decision.action == "create":
-            risk_id = decision.risk_id or _next_id(next_risk_ids, "R")
-            if not RISK_ID_RE.fullmatch(risk_id) or risk_id in next_risk_ids:
-                raise ValidationError("新建风险编号必须是未使用的 R###")
+            expected_risk_id = _next_id(next_risk_ids, "R")
+            risk_id = decision.risk_id or expected_risk_id
+            if risk_id != expected_risk_id:
+                raise ValidationError("新建风险编号必须是下一个连续的 R###")
             key = (risk_id, decision.period or "")
             if key in by_key or key in created_keys or not blank_rows:
                 raise ValidationError("风险登记册没有可用的预留行")
@@ -271,8 +289,9 @@ def _prepare(source: Path, decisions: Iterable[RiskDecision], findings: Iterable
         "assessed_risks": assess_all(list(planned_risks.values()), final_controls,
                                       _config_from_exportable_workbook(workbook)),
     }
-    return {"workbook": workbook, "resolved": resolved, "final_controls": final_controls,
+    return {"workbook": workbook, "decisions": decisions, "resolved": resolved, "final_controls": final_controls,
             "control_limit": control_limit,
+            "findings": findings, "source_hash": _hash(source),
             "preview": preview}
 
 
@@ -282,10 +301,37 @@ def _config_from_exportable_workbook(workbook) -> dict:
     return read_config(workbook[CONFIG_SHEET])
 
 
+def _commit_token(prepared: dict) -> str:
+    """Hash every resolved user-visible input used by a later commit."""
+    payload = {
+        "source_sha256": prepared["source_hash"],
+        "findings": sorted((item.finding_id, item.review_status) for item in prepared["findings"]),
+        "decisions": [{"action": item.action, "finding_ids": list(item.finding_ids)}
+                      for item in prepared["decisions"]],
+        "resolved": [
+            {"action": item.decision.action, "risk_id": item.risk_id, "target_row": item.target_row,
+             "inputs": _decision_values(item.decision, item.risk_id),
+             "finding_ids": list(item.decision.finding_ids)}
+            for item in prepared["resolved"]
+        ],
+        "controls": prepared["final_controls"],
+        "config": _config_from_exportable_workbook(prepared["workbook"]),
+    }
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _preview(source_path: Path, decisions, findings) -> tuple[dict, dict]:
+    prepared = _prepare(source_path, decisions, findings)
+    preview = dict(prepared["preview"])
+    preview["commit_token"] = _commit_token(prepared)
+    return preview, prepared
+
+
 def preview_changes(source, decisions, findings) -> dict:
     """Return deterministic literal-input changes and scores without file mutation."""
     source_path = _source_path(source)
-    return _prepare(source_path, decisions, findings)["preview"]
+    return _preview(source_path, decisions, findings)[0]
 
 
 def _write_input_rows(workbook, prepared: dict) -> None:
@@ -331,67 +377,79 @@ def _assert_saved_copy(source: Path, output: Path, prepared: dict) -> None:
             raise ValidationError("工作簿字面输入校验失败")
 
 
-def write_versioned_workbook(source, decisions, findings, timestamp: str | None = None, output_dir=None) -> WorkbookWriteResult:
-    """Create, validate, export, and score a versioned workbook copy.
-
-    All validation happens before the copy where possible.  If a later operation
-    fails, only the exact new copy and its exact new export directory are removed.
-    """
+def write_versioned_workbook(source, decisions, findings, *, expected_commit_token: str,
+                             timestamp: str | None = None, output_dir=None) -> WorkbookWriteResult:
+    """Build privately, then atomically publish a preview-bound workbook version."""
     source_path = _source_path(source)
-    source_hash = _hash(source_path)
     stamp = datetime.now().strftime("%Y%m%d_%H%M") if timestamp is None else timestamp
     if not isinstance(stamp, str) or not re.fullmatch(r"\d{8}_\d{4}", stamp):
         raise ValidationError("timestamp必须为 yyyyMMdd_HHmm")
-    parent = Path(output_dir) if output_dir is not None else source_path.parent
+    parent = (Path(output_dir) if output_dir is not None else source_path.parent).resolve()
     output = (parent / f"audit_risk_register_{stamp}.xlsx").resolve()
     export_dir = output.with_name(f"{output.stem}_data_export")
-    if output == source_path or output.exists() or export_dir.exists():
+    if output == source_path:
         raise ValidationError("OUTPUT_EXISTS")
-    prepared = _prepare(source_path, decisions, findings)
-    copied = False
-    exported = False
+
+    # This is deliberately before creating the output directory, lock, or temp
+    # directory: a stale preview has no filesystem side effects.
+    preview, prepared = _preview(source_path, decisions, findings)
+    if not isinstance(expected_commit_token, str) or expected_commit_token != preview["commit_token"]:
+        raise ValidationError("PREVIEW_STALE")
+    source_hash = prepared["source_hash"]
+
+    lock = (parent / f".{output.stem}.lock").resolve()
+    lock_created = False
+    private_dir: Path | None = None
+    published_export = False
     try:
-        output.parent.mkdir(parents=True, exist_ok=True)
+        parent.mkdir(parents=True, exist_ok=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_BINARY"):
             flags |= os.O_BINARY
         try:
-            descriptor = os.open(output, flags, 0o600)
+            descriptor = os.open(lock, flags, 0o600)
         except FileExistsError as exc:
             raise ValidationError("OUTPUT_EXISTS") from exc
-        copied = True  # Only this call can remove a file created with O_EXCL.
-        try:
-            with source_path.open("rb") as original, os.fdopen(descriptor, "wb") as versioned:
-                descriptor = None
-                shutil.copyfileobj(original, versioned, length=1024 * 1024)
-            shutil.copystat(source_path, output)
-        finally:
-            if descriptor is not None:
-                os.close(descriptor)
-        workbook = _open_checked(output)
+        else:
+            os.close(descriptor)
+            lock_created = True
+        if output.exists() or export_dir.exists():
+            raise ValidationError("OUTPUT_EXISTS")
+
+        private_dir = Path(tempfile.mkdtemp(prefix=f".{output.stem}.", dir=parent))
+        private_workbook = private_dir / output.name
+        private_export = private_dir / export_dir.name
+        shutil.copy2(source_path, private_workbook)
+        workbook = _open_checked(private_workbook)
         _write_input_rows(workbook, prepared)
         calculation = getattr(workbook, "calculation", None)
         if calculation is not None:
             calculation.fullCalcOnLoad = True
             calculation.forceFullCalc = True
             calculation.calcMode = "auto"
-        workbook.save(output)
-        _assert_saved_copy(source_path, output, prepared)
-        exported = True
-        manifest = export_workbook(output, export_dir)
+        workbook.save(private_workbook)
+        _assert_saved_copy(source_path, private_workbook, prepared)
+        manifest = export_workbook(private_workbook, private_export)
         assessed: list[dict] = []
         for period in manifest["periods"]:
-            config, risks, controls = load_dataset(export_dir / period, export_dir / "config.json")
+            config, risks, controls = load_dataset(private_export / period, private_export / "config.json")
             assessed.extend(assess_all(risks, controls, config))
         if _hash(source_path) != source_hash:
-            raise ValidationError("源工作簿完整性校验失败")
+            raise ValidationError("PREVIEW_STALE")
+        if output.exists() or export_dir.exists():
+            raise ValidationError("OUTPUT_EXISTS")
+        os.rename(private_export, export_dir)
+        published_export = True
+        try:
+            os.rename(private_workbook, output)  # Publish the workbook last.
+        except Exception:
+            if published_export and export_dir.exists():
+                shutil.rmtree(export_dir)
+                published_export = False
+            raise
         return WorkbookWriteResult(output, export_dir, manifest["periods"], assessed)
-    except Exception:
-        if exported and export_dir.exists():
-            shutil.rmtree(export_dir)
-        if copied and output.exists():
-            output.unlink()
-        raise
     finally:
-        if _hash(source_path) != source_hash:
-            raise ValidationError("源工作簿完整性校验失败")
+        if private_dir is not None and private_dir.exists():
+            shutil.rmtree(private_dir)
+        if lock_created and lock.exists():
+            lock.unlink()

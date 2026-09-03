@@ -12,6 +12,7 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import load_workbook
 
@@ -73,8 +74,13 @@ class WorkbookWriterTests(unittest.TestCase):
     def assert_source_unchanged(self) -> None:
         self.assertEqual(sha256(self.source), self.source_hash)
 
+    @staticmethod
+    def commit(source, decisions, findings, **kwargs) -> WorkbookWriteResult:
+        token = preview_changes(source, decisions, findings)["commit_token"]
+        return write_versioned_workbook(source, decisions, findings, expected_commit_token=token, **kwargs)
+
     def test_create_blank_id_merge_and_exclude_write_versioned_copy(self) -> None:
-        result = write_versioned_workbook(
+        result = self.commit(
             self.source,
             (create_decision(), merge_decision(), RiskDecision(action="exclude", finding_ids=("F-exclude",))),
             (finding("F-create"), finding("F-merge"), finding("F-exclude", "已排除")),
@@ -105,6 +111,94 @@ class WorkbookWriterTests(unittest.TestCase):
         self.assertEqual(sha256(self.source), before)
         self.assertEqual(list(self.root.glob("*.xlsx")), [self.source])
 
+    def test_periods_reject_path_syntax_without_escaping_export_root(self) -> None:
+        unsafe_periods = ("../escaped_period", ".", "..", "2026/H2", "2026\\H2", str(self.root / "absolute"))
+        for period in unsafe_periods:
+            with self.subTest(period=period):
+                decision = create_decision()
+                decision.period = period
+                with self.assertRaises((ValidationError, ValueError)):
+                    preview_changes(self.source, (decision,), (finding("F-create"),))
+        for period in unsafe_periods:
+            source = self.root / f"period-{len(period)}.xlsx"
+            shutil.copy2(self.source, source)
+            workbook = load_workbook(source)
+            workbook["风险登记册"]["F4"] = period
+            workbook.save(source)
+            out = self.root / f"out-{len(period)}"
+            with self.subTest(export_period=period), self.assertRaises((ValidationError, ValueError)):
+                export_workbook(source, out)
+            self.assertFalse((self.root / "escaped_period").exists())
+            self.assertFalse((self.root / "absolute").exists())
+
+    def test_preview_commit_token_rejects_source_or_decision_change(self) -> None:
+        decision = create_decision()
+        findings = (finding("F-create"),)
+        preview = preview_changes(self.source, (decision,), findings)
+        self.assertRegex(preview["commit_token"], r"^[0-9a-f]{64}$")
+        changed = load_workbook(self.source)
+        changed["风险登记册"]["B4"] = "只用于令牌失效的合成改动"
+        changed.save(self.source)
+        with self.assertRaisesRegex(ValidationError, "PREVIEW_STALE"):
+            write_versioned_workbook(self.source, (decision,), findings, expected_commit_token=preview["commit_token"],
+                                     timestamp="20260903_1212", output_dir=self.root / "versions")
+        self.assertFalse((self.root / "versions" / "audit_risk_register_20260903_1212.xlsx").exists())
+
+        shutil.copy2(SYNTHETIC_SOURCE, self.source)
+        self.source_hash = sha256(self.source)
+        preview = preview_changes(self.source, (decision,), findings)
+        decision.name = "令牌之后被篡改的合成风险"
+        with self.assertRaisesRegex(ValidationError, "PREVIEW_STALE"):
+            write_versioned_workbook(self.source, (decision,), findings, expected_commit_token=preview["commit_token"],
+                                     timestamp="20260903_1213", output_dir=self.root / "versions")
+        self.assertFalse((self.root / "versions" / "audit_risk_register_20260903_1213.xlsx").exists())
+        self.assert_source_unchanged()
+
+    def test_build_failure_uses_private_temp_paths_and_publishes_nothing(self) -> None:
+        decision, findings = create_decision(), (finding("F-create"),)
+        token = preview_changes(self.source, (decision,), findings)["commit_token"]
+        seen = []
+
+        def fail_export(path, out_dir):
+            seen.extend((Path(path), Path(out_dir)))
+            raise RuntimeError("synthetic interruption")
+
+        with patch("desktop.workbook_writer.export_workbook", side_effect=fail_export), self.assertRaises(RuntimeError):
+            write_versioned_workbook(self.source, (decision,), findings, expected_commit_token=token,
+                                     timestamp="20260903_1214", output_dir=self.root / "versions")
+        final = self.root / "versions" / "audit_risk_register_20260903_1214.xlsx"
+        self.assertTrue(seen)
+        self.assertNotEqual(seen[0], final)
+        self.assertFalse(final.exists())
+        self.assertFalse(final.with_name(final.stem + "_data_export").exists())
+        self.assert_source_unchanged()
+
+    def test_external_export_race_is_not_overwritten_or_deleted(self) -> None:
+        decision, findings = create_decision(), (finding("F-create"),)
+        token = preview_changes(self.source, (decision,), findings)["commit_token"]
+        destination = self.root / "versions"
+        final_export = destination / "audit_risk_register_20260903_1215_data_export"
+        real_export = export_workbook
+
+        def external_race(path, out_dir):
+            result = real_export(path, out_dir)
+            final_export.mkdir(parents=True)
+            (final_export / "external.marker").write_text("preserve", encoding="utf-8")
+            return result
+
+        with patch("desktop.workbook_writer.export_workbook", side_effect=external_race), self.assertRaisesRegex(ValidationError, "OUTPUT_EXISTS"):
+            write_versioned_workbook(self.source, (decision,), findings, expected_commit_token=token,
+                                     timestamp="20260903_1215", output_dir=destination)
+        self.assertTrue((final_export / "external.marker").is_file())
+        self.assertFalse((destination / "audit_risk_register_20260903_1215.xlsx").exists())
+        self.assert_source_unchanged()
+
+    def test_create_id_must_be_the_next_monotonic_risk_id(self) -> None:
+        with self.assertRaises((ValidationError, ValueError)):
+            preview_changes(self.source, (create_decision("F-create", "R999"),), (finding("F-create"),))
+        preview = preview_changes(self.source, (create_decision("F-create", "R025"),), (finding("F-create"),))
+        self.assertEqual(preview["new_risks"][0]["risk_id"], "R025")
+
     def test_unaccepted_unknown_duplicate_or_omitted_findings_are_atomic(self) -> None:
         cases = [
             ((create_decision(),), (finding("F-create", "待确认"),)),
@@ -117,12 +211,12 @@ class WorkbookWriterTests(unittest.TestCase):
             with self.subTest(decisions=decisions):
                 with self.assertRaises((ValidationError, ValueError)):
                     write_versioned_workbook(self.source, decisions, findings,
-                                             timestamp="20260903_1201", output_dir=self.root / "versions")
+                                             expected_commit_token="invalid", timestamp="20260903_1201", output_dir=self.root / "versions")
                 self.assertFalse((self.root / "versions" / "audit_risk_register_20260903_1201.xlsx").exists())
                 self.assert_source_unchanged()
 
     def test_excluded_controls_are_not_written_and_merge_replaces_controls(self) -> None:
-        result = write_versioned_workbook(
+        result = self.commit(
             self.source, (merge_decision(), RiskDecision(action="exclude", finding_ids=("F-exclude",))),
             (finding("F-merge"), finding("F-exclude", "已排除")), timestamp="20260903_1202",
             output_dir=self.root / "versions",
@@ -138,7 +232,7 @@ class WorkbookWriterTests(unittest.TestCase):
         self.assert_source_unchanged()
 
     def test_empty_confirmed_controls_removes_current_controls(self) -> None:
-        result = write_versioned_workbook(
+        result = self.commit(
             self.source, (merge_decision(controls=()),), (finding("F-merge"),),
             timestamp="20260903_1203", output_dir=self.root / "versions",
         )
@@ -154,7 +248,7 @@ class WorkbookWriterTests(unittest.TestCase):
             period="2025H2", likelihood=5, impact_scores={dim: 4 for dim in DIMS},
             rationale="更新后的合成依据", controls=(ConfirmedControl("替换后的控制", 5, True),),
         )
-        result = write_versioned_workbook(self.source, (decision,), (finding("F-merge"),),
+        result = self.commit(self.source, (decision,), (finding("F-merge"),),
                                           timestamp="20260903_1210", output_dir=self.root / "versions")
         controls = load_workbook(result.workbook_path, data_only=False)["控制措施表"]
         replacement_ids = [controls.cell(row, 1).value for row in range(4, 154)
@@ -163,7 +257,7 @@ class WorkbookWriterTests(unittest.TestCase):
         self.assert_source_unchanged()
 
     def test_input_writes_preserve_formula_template_and_config_export_parity(self) -> None:
-        result = write_versioned_workbook(self.source, (create_decision(),), (finding("F-create"),),
+        result = self.commit(self.source, (create_decision(),), (finding("F-create"),),
                                           timestamp="20260903_1204", output_dir=self.root / "versions")
         source_wb = load_workbook(self.source, data_only=False)
         written = load_workbook(result.workbook_path, data_only=False)
@@ -184,8 +278,8 @@ class WorkbookWriterTests(unittest.TestCase):
         collisions.mkdir()
         (collisions / "audit_risk_register_20260903_1205.xlsx").write_bytes(b"keep")
         with self.assertRaises(ValueError):
-            write_versioned_workbook(self.source, (create_decision(),), (finding("F-create"),),
-                                     timestamp="20260903_1205", output_dir=collisions)
+            self.commit(self.source, (create_decision(),), (finding("F-create"),),
+                        timestamp="20260903_1205", output_dir=collisions)
         self.assertEqual((collisions / "audit_risk_register_20260903_1205.xlsx").read_bytes(), b"keep")
         self.assert_source_unchanged()
         for mutate in (self._remove_sheet, self._duplicate_risk_id, self._fill_capacity):
@@ -194,7 +288,7 @@ class WorkbookWriterTests(unittest.TestCase):
             mutate(source)
             with self.subTest(mutate=mutate.__name__), self.assertRaises((ValidationError, ValueError)):
                 write_versioned_workbook(source, (create_decision(),), (finding("F-create"),),
-                                         timestamp="20260903_1206", output_dir=self.root / "failures")
+                                         expected_commit_token="invalid", timestamp="20260903_1206", output_dir=self.root / "failures")
             self.assertFalse((self.root / "failures" / "audit_risk_register_20260903_1206.xlsx").exists())
 
     def test_same_output_name_is_exclusively_created_by_one_concurrent_writer(self) -> None:
@@ -204,7 +298,7 @@ class WorkbookWriterTests(unittest.TestCase):
         def attempt():
             start.wait(timeout=5)
             try:
-                return write_versioned_workbook(
+                return self.commit(
                     self.source, (create_decision(),), (finding("F-create"),),
                     timestamp="20260903_1211", output_dir=destination,
                 )
@@ -228,13 +322,13 @@ class WorkbookWriterTests(unittest.TestCase):
         missing.period = "2099H1"
         with self.assertRaises((ValidationError, ValueError)):
             write_versioned_workbook(self.source, (missing,), (finding("F-merge"),),
-                                     timestamp="20260903_1207", output_dir=self.root / "versions")
+                                     expected_commit_token="invalid", timestamp="20260903_1207", output_dir=self.root / "versions")
         with self.assertRaises((ValidationError, ValueError)):
             write_versioned_workbook(self.source, (create_decision("F-create", "bad"),), (finding("F-create"),),
-                                     timestamp="20260903_1208", output_dir=self.root / "versions")
+                                     expected_commit_token="invalid", timestamp="20260903_1208", output_dir=self.root / "versions")
         with self.assertRaises((ValidationError, ValueError)):
             write_versioned_workbook(self.source, (create_decision("F-create", "R001"),), (finding("F-create"),),
-                                     timestamp="20260903_1208", output_dir=self.root / "versions")
+                                     expected_commit_token="invalid", timestamp="20260903_1208", output_dir=self.root / "versions")
 
     def test_exporter_callable_matches_legacy_content_and_cli_failure_is_chinese(self) -> None:
         result = export_workbook(self.source, self.root / "export")

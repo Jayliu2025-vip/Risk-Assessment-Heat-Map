@@ -10,6 +10,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -21,10 +22,18 @@ from common import CONTROL_FIELDS, DIMS, MODEL_VERSION, RISK_FIELDS
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_XLSX = os.path.join(ROOT, "audit_risk_register.xlsx")
 OUT_DIR = os.path.join(ROOT, "data", "export")
+PERIOD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}\Z")
 
 
 class ExportWorkbookError(ValueError):
     """A workbook cannot be exported without violating its input contract."""
+
+
+def validate_period(value):
+    """Return a filesystem-safe assessment period token."""
+    if not isinstance(value, str) or not PERIOD_RE.fullmatch(value):
+        raise ExportWorkbookError("[错误] 评估期间格式无效。")
+    return value
 
 
 def read_config(ws):
@@ -112,6 +121,7 @@ def export_workbook(xlsx_path, out_dir=OUT_DIR):
                 continue
             if not (isinstance(v, int) and 1 <= v <= 5):
                 raise ExportWorkbookError(f"[错误] 风险 {rid} 的打分 {label}={v} 超出 1~5。")
+        period = validate_period(period)
         risks.append({"risk_id": str(rid).strip(), "name": name, "domain": dom,
                       "description": desc or "", "owner_dept": dept or "",
                       "period": period, "likelihood": int(lik),
@@ -120,15 +130,19 @@ def export_workbook(xlsx_path, out_dir=OUT_DIR):
     for vals in read_rows(controls_ws, max_col=6):
         cid, rid, period, desc, score, key = vals
         controls.append({"control_id": str(cid).strip(), "risk_id": str(rid).strip(),
-                         "period": period, "description": desc or "",
+                         "period": validate_period(period), "description": desc or "",
                          "score": int(score),
                          "key": "是" if str(key).strip() in ("是", "1", "true", "True") else "否"})
 
     periods = sorted({r["period"] for r in risks})
-    output = Path(out_dir)
+    output = Path(out_dir).resolve()
     paths = []
     for p in periods:
-        d = output / str(p)
+        d = (output / p).resolve()
+        try:
+            d.relative_to(output)
+        except ValueError as exc:
+            raise ExportWorkbookError("[错误] 评估期间路径无效。") from exc
         d.mkdir(parents=True, exist_ok=True)
         with (d / "risks.csv").open("w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=RISK_FIELDS)
