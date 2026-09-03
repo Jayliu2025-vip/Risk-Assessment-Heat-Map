@@ -5,7 +5,9 @@ from dataclasses import asdict, fields
 from pathlib import Path
 
 from desktop.models import AnalysisTask, FindingDraft, ModelProfile, ValidationError
+from desktop.credentials import CredentialStore
 from desktop.storage import DesktopStore
+from desktop.tempfiles import TaskTempFiles
 from tools.common import DIMS
 
 
@@ -36,6 +38,7 @@ class DesktopStoreTests(unittest.TestCase):
         self.assertEqual(asdict(store.get_task(original.task_id)), asdict(original))
         expected = [field.name for field in fields(AnalysisTask)]
         self.assertEqual(store.table_columns("analysis_tasks"), expected)
+        self.assertEqual(store.table_columns("findings"), [field.name for field in fields(FindingDraft)])
         self.assertEqual(store.table_columns("model_profiles"), ["name", "base_url", "model", "supports_vision"])
 
     def test_finding_and_profile_roundtrip_status_update_and_deterministic_order(self):
@@ -60,8 +63,11 @@ class DesktopStoreTests(unittest.TestCase):
         store.save_findings([self.finding("T-one", "F-shared")])
         with self.assertRaises(ValueError):
             store.save_findings([self.finding("T-two", "F-shared")])
-        store.delete_task("T-one")
+        self.assertEqual(store.connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+        with store.connection:
+            store.connection.execute("DELETE FROM analysis_tasks WHERE task_id = ?", ("T-one",))
         self.assertEqual(store.list_findings("T-one"), [])
+        self.assertFalse(hasattr(store, "delete_task"))
 
     def test_invalid_raw_database_row_is_rejected_when_read(self):
         store = self.make_store()
@@ -84,12 +90,30 @@ class DesktopStoreTests(unittest.TestCase):
 
     def test_database_does_not_persist_secrets_full_source_or_absolute_report_path(self):
         store = self.make_store()
-        store.save_task(self.task())
-        store.save_findings([self.finding()])
+        task = self.task()
+        profile = ModelProfile("local", "https://model.example.test", "small", True)
+        finding = self.finding()
+        store.save_task(task)
+        store.save_model_profile(profile)
+        store.save_findings([finding])
+        class MemoryKeyring:
+            def __init__(self):
+                self.values = {}
+
+            def set_password(self, service, name, secret):
+                self.values[(service, name)] = secret
+
+        CredentialStore(MemoryKeyring()).set_api_key("local", "sk-synthetic-secret")
+        with tempfile.TemporaryDirectory() as td:
+            temp = TaskTempFiles(Path(td) / "temp")
+            source = temp.create(task.task_id) / "source.txt"
+            source.write_text("虚构报告完整正文\nC:\\synthetic\\reports\\full-report.pdf", encoding="utf-8")
+            self.assertEqual(temp.cleanup(task.task_id), [])
         store.connection.commit()
         payload = Path(store.path).read_bytes()
         for forbidden in (b"sk-synthetic-secret", "虚构报告完整正文".encode(), b"C:\\synthetic\\reports\\full-report.pdf"):
             self.assertNotIn(forbidden, payload)
+        self.assertIn(finding.source_excerpt.encode(), payload)
 
 
 if __name__ == "__main__":

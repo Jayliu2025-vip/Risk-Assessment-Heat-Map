@@ -87,6 +87,12 @@ class DesktopSecurityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 resource_path(unsafe)
 
+    def test_resource_path_uses_meipass_when_frozen(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(sys, "frozen", True, create=True), patch.object(sys, "_MEIPASS", td, create=True):
+            resolved = resource_path("assets/icon.png")
+            self.assertEqual(resolved, (Path(td) / "assets" / "icon.png").resolve())
+            self.assertIn(Path(td).resolve(), resolved.parents)
+
     def test_task_temp_files_create_cleanup_and_reject_invalid_ids(self):
         with tempfile.TemporaryDirectory() as td:
             temp = TaskTempFiles(Path(td) / "temp")

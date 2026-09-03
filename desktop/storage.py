@@ -105,10 +105,6 @@ class DesktopStore:
         row = self.connection.execute("SELECT task_id, file_name, file_hash, created_at, status, model_profile, extraction_method FROM analysis_tasks WHERE task_id = ?", (task_id,)).fetchone()
         return None if row is None else self._row_task(row)
 
-    def delete_task(self, task_id: str) -> None:
-        with self.connection:
-            self.connection.execute("DELETE FROM analysis_tasks WHERE task_id = ?", (task_id,))
-
     def save_findings(self, findings: Iterable[FindingDraft]) -> list[FindingDraft]:
         checked = [FindingDraft(**asdict(finding)) for finding in findings]
         columns = ", ".join(_FINDING_COLUMNS)
