@@ -7,10 +7,11 @@ from .models import (
     FindingDraft,
     ModelProfile,
     RiskDecision,
+    RemediationStatus,
     ReviewStatus,
     TaskStatus,
     ValidationError,
     score_or_none,
 )
 
-__all__ = ["AnalysisTask", "ConfirmedControl", "ExtractedBlock", "FindingDraft", "ModelProfile", "RiskDecision", "ReviewStatus", "TaskStatus", "ValidationError", "score_or_none"]
+__all__ = ["AnalysisTask", "ConfirmedControl", "ExtractedBlock", "FindingDraft", "ModelProfile", "RiskDecision", "RemediationStatus", "ReviewStatus", "TaskStatus", "ValidationError", "score_or_none"]

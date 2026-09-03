@@ -18,7 +18,7 @@ from openpyxl import load_workbook
 
 from desktop.models import ConfirmedControl, FindingDraft, RiskDecision, ValidationError
 from desktop.workbook_writer import (WorkbookWriteResult, preview_changes,
-                                     write_versioned_workbook)
+                                     write_versioned_workbook, load_risk_catalog)
 from tools.common import DIMS, assess_all, load_dataset
 from tools.export_from_excel import export_workbook
 
@@ -98,6 +98,26 @@ class WorkbookWriterTests(unittest.TestCase):
                          ["R025", "新增合成风险", "采购与外包", "新增风险描述", "审计部", "2026H2", 4] + [3] * 8)
         merged = next(row for row in range(4, 204) if register.cell(row, 1).value == "R001" and register.cell(row, 6).value == "2026H1")
         self.assertEqual(register.cell(merged, 2).value, "更新后的合成风险")
+
+    def test_catalog_and_owner_are_loaded_from_the_selected_workbook(self) -> None:
+        catalog = load_risk_catalog(self.source)
+        selected = next(item for item in catalog if item["risk_id"] == "R001" and item["period"] == "2026H1")
+        self.assertEqual(selected["owner_dept"], "财务部")
+        self.assertEqual(selected["name"], "费用报销合规风险")
+
+    def test_remediation_status_is_written_into_existing_rationale_column(self) -> None:
+        decision = create_decision()
+        decision.remediation_status = "整改中"
+        result = self.commit(self.source, (decision,), (finding("F-create"),),
+                             timestamp="20260903_1215", output_dir=self.root / "versions")
+        workbook = load_workbook(result.workbook_path, data_only=False)
+        try:
+            register = workbook["风险登记册"]
+            row = next(row for row in range(4, register.max_row + 1)
+                       if register.cell(row, 1).value == "R025")
+            self.assertEqual(register.cell(row, 26).value, "确认后的合成依据\n[整改状态：整改中]")
+        finally:
+            workbook.close()
         self.assert_source_unchanged()
 
     def test_preview_is_deterministic_and_does_not_mutate(self) -> None:
@@ -265,7 +285,7 @@ class WorkbookWriterTests(unittest.TestCase):
         row = next(row for row in range(4, 204) if register.cell(row, 1).value == "R025")
         for col in range(16, 26):
             self.assertEqual(register.cell(row, col).value, source_wb["风险登记册"].cell(row, col).value)
-        self.assertEqual(register.cell(row, 26).value, "确认后的合成依据")
+        self.assertEqual(register.cell(row, 26).value, "确认后的合成依据\n[整改状态：未确认]")
         old_export = self.root / "old_export"
         new_export = self.root / "new_export"
         export_workbook(self.source, old_export)

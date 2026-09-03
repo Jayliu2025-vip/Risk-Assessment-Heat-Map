@@ -126,6 +126,17 @@ def _risk_records(ws) -> tuple[list[dict], dict[tuple[str, str], int], set[str]]
     return records, by_key, ids
 
 
+def load_risk_catalog(source) -> list[dict]:
+    """Read validated risk rows from the user-selected workbook."""
+    source_path = _source_path(source)
+    workbook = _open_checked(source_path)
+    try:
+        records, _, _ = _risk_records(workbook[RISK_SHEET])
+        return records
+    finally:
+        workbook.close()
+
+
 def _control_limit(ws) -> int:
     """Read the existing validation range instead of inserting unstyled rows."""
     limits = []
@@ -205,7 +216,8 @@ def _decision_values(decision: RiskDecision, risk_id: str) -> list[object]:
               period, decision.likelihood] + [scores.get(dim) for dim in DIMS]
     if not any(value is not None for value in values[7:15]):
         raise ValidationError("至少需要一个影响维度评分")
-    return values + [decision.rationale]
+    rationale = f"{decision.rationale}\n[整改状态：{decision.remediation_status}]"
+    return values + [rationale]
 
 
 def _prepare(source: Path, decisions: Iterable[RiskDecision], findings: Iterable[FindingDraft]) -> dict:

@@ -8,6 +8,7 @@ from tools.common import DIMS, DOMAINS
 
 TaskStatus = Literal["提取中", "分析中", "待复核", "已完成", "失败"]
 ReviewStatus = Literal["待确认", "已接受", "已排除"]
+RemediationStatus = Literal["未确认", "未整改", "整改中", "已整改", "不适用"]
 
 
 class ValidationError(ValueError):
@@ -101,6 +102,8 @@ class FindingDraft:
     rationale: str
     needs_review: bool
     review_status: ReviewStatus = "待确认"
+    merged_finding_ids: tuple[str, ...] = ()
+    merged_into: str = ""
 
     def __post_init__(self) -> None:
         for name in ("task_id", "finding_id", "title", "fact_summary", "source_page", "source_excerpt", "rationale"):
@@ -113,6 +116,17 @@ class FindingDraft:
         self.impact_scores = _scores(self.impact_scores)
         if not isinstance(self.needs_review, bool) or self.review_status not in ("待确认", "已接受", "已排除"):
             raise ValidationError("无效复核状态")
+        if (not isinstance(self.merged_finding_ids, (tuple, list)) or
+                any(not isinstance(value, str) or not value.strip() for value in self.merged_finding_ids)):
+            raise ValidationError("merged_finding_ids必须是字符串列表")
+        self.merged_finding_ids = tuple(value.strip() for value in self.merged_finding_ids)
+        if len(set(self.merged_finding_ids)) != len(self.merged_finding_ids) or self.finding_id in self.merged_finding_ids:
+            raise ValidationError("merged_finding_ids不得重复或包含自身")
+        if not isinstance(self.merged_into, str):
+            raise ValidationError("merged_into必须是字符串")
+        self.merged_into = self.merged_into.strip()
+        if self.merged_into == self.finding_id or (self.merged_into and self.merged_finding_ids):
+            raise ValidationError("发现合并关系无效")
 
     @classmethod
     def from_model(cls, task_id: str, payload: Mapping[str, Any], known_risk_ids: set[str]) -> "FindingDraft":
@@ -181,6 +195,7 @@ class RiskDecision:
     impact_scores: dict[str, int | None] | None = None
     rationale: str | None = None
     controls: tuple[ConfirmedControl, ...] = ()
+    remediation_status: RemediationStatus | None = None
 
     def __post_init__(self) -> None:
         if self.action not in ("merge", "create", "exclude"):
@@ -217,9 +232,18 @@ class RiskDecision:
             self.impact_scores = _scores(self.impact_scores)
             if self.likelihood is None:
                 raise ValidationError("likelihood不能为空")
+            if self.remediation_status is None:
+                self.remediation_status = "未确认"
+            if not isinstance(self.remediation_status, str):
+                raise ValidationError("remediation_status必须是字符串")
+            self.remediation_status = self.remediation_status.strip()
+            if self.remediation_status not in ("未确认", "未整改", "整改中", "已整改", "不适用"):
+                raise ValidationError("整改状态无效")
         else:
             if any(getattr(self, name) is not None for name in ("risk_id", "name", "domain", "description", "owner_dept", "period", "likelihood", "impact_scores", "rationale")) or self.controls:
                 raise ValidationError("排除决策不得携带正式风险字段或控制")
+            if self.remediation_status is not None:
+                raise ValidationError("排除决策不得携带整改状态")
         if not isinstance(self.controls, (tuple, list)) or any(not isinstance(control, ConfirmedControl) for control in self.controls):
             raise ValidationError("controls必须由ConfirmedControl组成")
         self.controls = tuple(self.controls)

@@ -155,13 +155,39 @@ class DesktopModelsTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             RiskDecision(**data)
 
+    def test_risk_decision_normalizes_remediation_status(self):
+        base = dict(action="create", finding_ids=("F-001",), name="采购风险", domain="采购与外包",
+                    description="描述", owner_dept="采购部", period="2026", likelihood=3,
+                    impact_scores={dim: 2 for dim in DIMS}, rationale="理由")
+        self.assertEqual(RiskDecision(**base).remediation_status, "未确认")
+        self.assertEqual(RiskDecision(**base, remediation_status=" 整改中 ").remediation_status, "整改中")
+        with self.assertRaises(ValidationError):
+            RiskDecision(**base, remediation_status="已关闭")
+        with self.assertRaises(ValidationError):
+            RiskDecision(action="exclude", finding_ids=("F-001",), remediation_status="不适用")
+
+    def test_finding_merge_links_are_strict_and_json_friendly(self):
+        payload = self.valid_payload()
+        finding = FindingDraft.from_model("T001", payload, {"R001"})
+        merged = FindingDraft(**{**asdict(finding), "merged_finding_ids": [" F-002 ", "F-003"]})
+        secondary = FindingDraft(**{**asdict(finding), "finding_id": "F-002", "merged_into": " F-001 "})
+        self.assertEqual(merged.merged_finding_ids, ("F-002", "F-003"))
+        self.assertEqual(secondary.merged_into, "F-001")
+        json.dumps(asdict(merged), ensure_ascii=False)
+        for changes in ({"merged_finding_ids": ["F-002", "F-002"]},
+                        {"merged_finding_ids": ["F-001"]},
+                        {"merged_into": "F-001", "merged_finding_ids": ["F-003"]}):
+            with self.assertRaises(ValidationError):
+                FindingDraft(**{**asdict(finding), **changes})
+
     def test_exact_dataclass_fields(self):
         self.assertEqual([f.name for f in fields(AnalysisTask)], ["task_id", "file_name", "file_hash", "created_at", "status", "model_profile", "extraction_method"])
         self.assertEqual([f.name for f in fields(ExtractedBlock)], ["locator", "text", "method", "needs_review", "image_path"])
         finding_fields = fields(FindingDraft)
-        self.assertEqual(finding_fields[-2].name, "needs_review")
-        self.assertIs(finding_fields[-2].default, MISSING)
-        self.assertEqual(finding_fields[-1].default, "待确认")
+        self.assertEqual(finding_fields[-4].name, "needs_review")
+        self.assertIs(finding_fields[-4].default, MISSING)
+        self.assertEqual([field.name for field in finding_fields[-3:]], ["review_status", "merged_finding_ids", "merged_into"])
+        self.assertEqual(finding_fields[-3].default, "待确认")
 
 
 if __name__ == "__main__":

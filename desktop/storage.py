@@ -51,9 +51,15 @@ class DesktopStore:
                     "task_id TEXT NOT NULL, finding_id TEXT NOT NULL, title TEXT NOT NULL, fact_summary TEXT NOT NULL, "
                     "source_page TEXT NOT NULL, source_excerpt TEXT NOT NULL, matched_risk_id TEXT NOT NULL, domain TEXT NOT NULL, "
                     "likelihood INTEGER, impact_scores TEXT NOT NULL, rationale TEXT NOT NULL, needs_review INTEGER NOT NULL, "
-                    "review_status TEXT NOT NULL, PRIMARY KEY (task_id, finding_id), "
+                    "review_status TEXT NOT NULL, merged_finding_ids TEXT NOT NULL DEFAULT '[]', "
+                    "merged_into TEXT NOT NULL DEFAULT '', PRIMARY KEY (task_id, finding_id), "
                     "FOREIGN KEY (task_id) REFERENCES analysis_tasks(task_id) ON DELETE CASCADE)"
                 )
+                finding_columns = {row[1] for row in connection.execute("PRAGMA table_info(findings)")}
+                if "merged_finding_ids" not in finding_columns:
+                    connection.execute("ALTER TABLE findings ADD COLUMN merged_finding_ids TEXT NOT NULL DEFAULT '[]'")
+                if "merged_into" not in finding_columns:
+                    connection.execute("ALTER TABLE findings ADD COLUMN merged_into TEXT NOT NULL DEFAULT ''")
                 connection.execute(
                     "CREATE TABLE IF NOT EXISTS model_profiles ("
                     "name TEXT PRIMARY KEY, base_url TEXT NOT NULL, model TEXT NOT NULL, supports_vision INTEGER NOT NULL)"
@@ -69,6 +75,7 @@ class DesktopStore:
     def _finding_values(finding: FindingDraft) -> tuple[object, ...]:
         values = asdict(finding)
         values["impact_scores"] = json.dumps(values["impact_scores"], ensure_ascii=False, separators=(",", ":"))
+        values["merged_finding_ids"] = json.dumps(values["merged_finding_ids"], ensure_ascii=False, separators=(",", ":"))
         values["needs_review"] = int(values["needs_review"])
         return tuple(values[column] for column in _FINDING_COLUMNS)
 
@@ -87,6 +94,7 @@ class DesktopStore:
         payload = {column: row[column] for column in _FINDING_COLUMNS}
         try:
             payload["impact_scores"] = json.loads(payload["impact_scores"])
+            payload["merged_finding_ids"] = json.loads(payload["merged_finding_ids"])
         except (TypeError, json.JSONDecodeError) as exc:
             raise ValidationError("impact_scores must be valid JSON") from exc
         if payload["needs_review"] not in (0, 1, False, True):
