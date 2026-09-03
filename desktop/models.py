@@ -203,7 +203,14 @@ class RiskDecision:
         if self.action != "exclude":
             if not self.finding_ids:
                 raise ValidationError("合并或新建决策至少需要一个finding_id")
-            for name in ("risk_id", "name", "description", "owner_dept", "period", "rationale"):
+            # New risks may omit an ID: the workbook writer allocates the next R###
+            # after it has checked the immutable source workbook.  A merge remains
+            # deliberately strict because it must identify an existing row.
+            if self.action == "merge":
+                self.risk_id = _text(self.risk_id, "risk_id")
+            elif self.risk_id is None:
+                self.risk_id = ""
+            for name in ("name", "description", "owner_dept", "period", "rationale"):
                 setattr(self, name, _text(getattr(self, name), name))
             self.domain = _domain(self.domain)
             self.likelihood = score_or_none(self.likelihood)

@@ -11,6 +11,7 @@ import csv
 import json
 import os
 import sys
+from pathlib import Path
 
 from openpyxl import load_workbook
 
@@ -20,6 +21,10 @@ from common import CONTROL_FIELDS, DIMS, MODEL_VERSION, RISK_FIELDS
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_XLSX = os.path.join(ROOT, "audit_risk_register.xlsx")
 OUT_DIR = os.path.join(ROOT, "data", "export")
+
+
+class ExportWorkbookError(ValueError):
+    """A workbook cannot be exported without violating its input contract."""
 
 
 def read_config(ws):
@@ -71,40 +76,48 @@ def read_rows(ws, max_col, start=4):
     return rows
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--xlsx", default=DEFAULT_XLSX)
-    args = ap.parse_args()
+def export_workbook(xlsx_path, out_dir=OUT_DIR):
+    """Export literal input columns from a workbook and return its manifest.
 
-    wb = load_workbook(args.xlsx, data_only=False)
-    cfg = read_config(wb["参数配置"])
+    This API intentionally does not terminate the process.  Desktop callers can
+    therefore clean up an incomplete versioned copy while the command line keeps
+    its established Chinese diagnostics in :func:`main`.
+    """
+    try:
+        wb = load_workbook(xlsx_path, data_only=False)
+        config_ws = wb["参数配置"]
+        risks_ws = wb["风险登记册"]
+        controls_ws = wb["控制措施表"]
+    except (OSError, KeyError, ValueError) as exc:
+        raise ExportWorkbookError("[错误] 工作簿结构不符合导出要求。") from exc
+    cfg = read_config(config_ws)
     all_rows = {"全领域默认": cfg["weights"]}
     all_rows.update(cfg["domain_weights"])
     for name, w in all_rows.items():
         wsum = round(sum(w.values()), 6)
         if abs(wsum - 1.0) > 1e-6:
-            sys.exit(f"[错误] 权重行[{name}]之和为 {wsum}，必须等于 1。请先修正「参数配置」页。")
+            raise ExportWorkbookError(f"[错误] 权重行[{name}]之和为 {wsum}，必须等于 1。请先修正「参数配置」页。")
 
     risks, controls = [], []
-    for vals in read_rows(wb["风险登记册"], max_col=26):
+    for vals in read_rows(risks_ws, max_col=26):
         rid, name, dom, desc, dept, period, lik = vals[:7]
         dims = [None if v is None or str(v).strip() == "" else int(v)
                 for v in vals[7:15]]
         scored = [d for d in dims if d is not None]
         if not scored:
-            sys.exit(f"[错误] 风险 {rid} 至少需要为一个影响维度打分（其余可留空=不适用）。")
+            raise ExportWorkbookError(f"[错误] 风险 {rid} 至少需要为一个影响维度打分（其余可留空=不适用）。")
         for label, v in zip(["可能性"] + [f"影响-{d}" for d in DIMS],
                             [lik] + dims):
             if v is None and label != "可能性":
                 continue
             if not (isinstance(v, int) and 1 <= v <= 5):
-                sys.exit(f"[错误] 风险 {rid} 的打分 {label}={v} 超出 1~5。")
+                raise ExportWorkbookError(f"[错误] 风险 {rid} 的打分 {label}={v} 超出 1~5。")
         risks.append({"risk_id": str(rid).strip(), "name": name, "domain": dom,
                       "description": desc or "", "owner_dept": dept or "",
                       "period": period, "likelihood": int(lik),
                       "rationale": vals[25] or "",
                       **dict(zip(DIMS, dims))})
-    for vals in read_rows(wb["控制措施表"], max_col=6):
+    for vals in read_rows(controls_ws, max_col=6):
         cid, rid, period, desc, score, key = vals
         controls.append({"control_id": str(cid).strip(), "risk_id": str(rid).strip(),
                          "period": period, "description": desc or "",
@@ -112,28 +125,49 @@ def main():
                          "key": "是" if str(key).strip() in ("是", "1", "true", "True") else "否"})
 
     periods = sorted({r["period"] for r in risks})
+    output = Path(out_dir)
+    paths = []
     for p in periods:
-        d = os.path.join(OUT_DIR, str(p))
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "risks.csv"), "w", newline="", encoding="utf-8-sig") as f:
+        d = output / str(p)
+        d.mkdir(parents=True, exist_ok=True)
+        with (d / "risks.csv").open("w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=RISK_FIELDS)
             w.writeheader()
             w.writerows([r for r in risks if r["period"] == p])
-        with open(os.path.join(d, "controls.csv"), "w", newline="", encoding="utf-8-sig") as f:
+        with (d / "controls.csv").open("w", newline="", encoding="utf-8-sig") as f:
             w = csv.DictWriter(f, fieldnames=CONTROL_FIELDS)
             w.writeheader()
             w.writerows([c for c in controls if c["period"] == p])
-    with open(os.path.join(OUT_DIR, "config.json"), "w", encoding="utf-8") as f:
+        paths.extend((d / "risks.csv", d / "controls.csv"))
+    config_path = output / "config.json"
+    with config_path.open("w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
-
-    print(f"导出完成：{len(risks)} 条风险 / {len(controls)} 个控制点 / {len(periods)} 期 "
-          f"({', '.join(map(str, periods))}) -> {os.path.relpath(OUT_DIR, ROOT)}")
+    paths.append(config_path)
     orphan = [c["control_id"] for c in controls
               if not any(r["risk_id"] == c["risk_id"] and r["period"] == c["period"]
                          for r in risks)]
-    if orphan:
-        print(f"[警告] {len(orphan)} 个控制点找不到对应（风险编号+期间）：{orphan}")
+    return {"risks": len(risks), "controls": len(controls), "periods": periods,
+            "paths": [str(path) for path in paths], "orphan_controls": orphan}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--xlsx", default=DEFAULT_XLSX)
+    args = ap.parse_args()
+    try:
+        result = export_workbook(args.xlsx, OUT_DIR)
+    except ExportWorkbookError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except (OSError, ValueError, TypeError, KeyError):
+        print("[错误] 工作簿结构不符合导出要求。", file=sys.stderr)
+        return 1
+    print(f"导出完成：{result['risks']} 条风险 / {result['controls']} 个控制点 / {len(result['periods'])} 期 "
+          f"({', '.join(map(str, result['periods']))}) -> {os.path.relpath(OUT_DIR, ROOT)}")
+    if result["orphan_controls"]:
+        print(f"[警告] {len(result['orphan_controls'])} 个控制点找不到对应（风险编号+期间）：{result['orphan_controls']}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
