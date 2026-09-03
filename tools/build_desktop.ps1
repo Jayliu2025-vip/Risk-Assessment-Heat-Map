@@ -1,0 +1,66 @@
+[CmdletBinding()]
+param(
+    [string]$PythonExe,
+    [switch]$SkipTests
+)
+
+$ErrorActionPreference = 'Stop'
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+if ([string]::IsNullOrWhiteSpace($PythonExe)) { $PythonExe = Join-Path $RepoRoot '.venv-desktop\Scripts\python.exe' }
+if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) { throw "PYTHON_NOT_FOUND $PythonExe" }
+$PythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
+
+function Assert-AllowedBuildPath([string]$Candidate) {
+    $resolved = [System.IO.Path]::GetFullPath($Candidate)
+    $allowed = @(
+        [System.IO.Path]::GetFullPath((Join-Path $RepoRoot 'build\risk_heatmap_desktop')),
+        [System.IO.Path]::GetFullPath((Join-Path $RepoRoot 'dist\RiskAssessmentHeatMap')),
+        [System.IO.Path]::GetFullPath((Join-Path $RepoRoot 'installer-output')),
+        [System.IO.Path]::GetFullPath((Join-Path $RepoRoot 'build\licenses'))
+    )
+    if ($allowed -notcontains $resolved) { throw "UNSAFE_BUILD_PATH $resolved" }
+    return $resolved
+}
+
+$BuildPath = Assert-AllowedBuildPath (Join-Path $RepoRoot 'build\risk_heatmap_desktop')
+$DistPath = Assert-AllowedBuildPath (Join-Path $RepoRoot 'dist\RiskAssessmentHeatMap')
+$InstallerPath = Assert-AllowedBuildPath (Join-Path $RepoRoot 'installer-output')
+$LicensePath = Assert-AllowedBuildPath (Join-Path $RepoRoot 'build\licenses')
+foreach ($path in @($BuildPath, $DistPath, $InstallerPath, $LicensePath)) {
+    if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+}
+
+& $PythonExe -c "import importlib.metadata as m; assert m.version('PyInstaller') == '6.22.2'; import rapidocr, pypdfium2, onnxruntime, webview, keyring"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if (-not $SkipTests) {
+    & $PythonExe -m unittest discover -s (Join-Path $RepoRoot 'tests') -p 'test_*.py'
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Push-Location $RepoRoot
+    try { npm exec playwright test } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+& $PythonExe (Join-Path $RepoRoot 'tools\export_third_party_licenses.py') --output $LicensePath
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $PythonExe -m PyInstaller (Join-Path $RepoRoot 'packaging\risk_heatmap_desktop.spec') --workpath $BuildPath --distpath (Join-Path $RepoRoot 'dist') --noconfirm
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$OnedirExe = Join-Path $DistPath 'RiskAssessmentHeatMap.exe'
+if (-not (Test-Path -LiteralPath $OnedirExe -PathType Leaf)) { throw "ONEDIR_NOT_BUILT $OnedirExe" }
+Write-Output "ONEDIR_PATH $OnedirExe"
+Write-Output "ONEDIR_SHA256 $((Get-FileHash -LiteralPath $OnedirExe -Algorithm SHA256).Hash)"
+$iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+if (-not $iscc) {
+    $isccCandidates = @(
+        (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+    )
+    $iscc = $isccCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+}
+if (-not $iscc) { Write-Error 'INNO_SETUP_NOT_FOUND'; exit 2 }
+& $iscc (Join-Path $RepoRoot 'packaging\RiskAssessmentHeatMap.iss')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$InstallerExe = Join-Path $InstallerPath 'RiskAssessmentHeatMap-Setup.exe'
+Write-Output "INSTALLER_PATH $InstallerExe"
+Write-Output "INSTALLER_SHA256 $((Get-FileHash -LiteralPath $InstallerExe -Algorithm SHA256).Hash)"

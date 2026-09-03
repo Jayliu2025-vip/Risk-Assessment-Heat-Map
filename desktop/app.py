@@ -7,16 +7,30 @@ from pathlib import Path
 import threading
 from typing import Any, Callable
 
-from .bridge import DesktopBridge
-from .credentials import CredentialStore
-from .extraction import extract_report
-from .model_client import ModelClient
-from .ocr import RapidOcrEngine
-from .paths import resource_path, state_db_path, temp_root
-from .pipeline import AnalysisPipeline
-from .storage import DesktopStore
-from .tempfiles import TaskTempFiles
-from . import workbook_writer
+if __package__ in {None, ""}:  # PyInstaller executes this entrypoint as a script.
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from desktop.bridge import DesktopBridge
+    from desktop.credentials import CredentialStore
+    from desktop.extraction import extract_report
+    from desktop.model_client import ModelClient
+    from desktop.ocr import RapidOcrEngine
+    from desktop.paths import resource_path, state_db_path, temp_root
+    from desktop.pipeline import AnalysisPipeline
+    from desktop.storage import DesktopStore
+    from desktop.tempfiles import TaskTempFiles
+    from desktop import workbook_writer
+else:
+    from .bridge import DesktopBridge
+    from .credentials import CredentialStore
+    from .extraction import extract_report
+    from .model_client import ModelClient
+    from .ocr import RapidOcrEngine
+    from .paths import resource_path, state_db_path, temp_root
+    from .pipeline import AnalysisPipeline
+    from .storage import DesktopStore
+    from .tempfiles import TaskTempFiles
+    from . import workbook_writer
 from tools.common import load_dataset
 
 
@@ -102,4 +116,19 @@ def main(*, webview_module: Any | None = None, bridge_factory: Callable[[], Any]
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--synthetic-smoke" in sys.argv[1:]:
+        from desktop.smoke import run_synthetic_smoke
+        try:
+            run_synthetic_smoke()
+        except Exception:
+            raise SystemExit(1)
+        # A windowed PyInstaller executable has no ``sys.stdout``. File
+        # descriptor 1 is nevertheless valid when the verifier redirects it.
+        import os
+        try:
+            os.write(1, b"PACKAGED_DESKTOP_SMOKE_OK\n")
+        except OSError:
+            pass
+    else:
+        main()
