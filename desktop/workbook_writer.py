@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
+import os
 import re
 import shutil
 from typing import Iterable
@@ -242,8 +243,10 @@ def _prepare(source: Path, decisions: Iterable[RiskDecision], findings: Iterable
             **dict(zip(DIMS, values[7:15])), "rationale": values[15],
         }
     replaced = {(item.risk_id, item.decision.period or "") for item in resolved if item.decision.action == "merge"}
+    # IDs remain monotonically allocated even when a merge replaces and removes
+    # controls.  Reusing a removed identifier would make an audit trail ambiguous.
+    used_control_ids = {record["control_id"] for record in controls}
     remaining_controls = [record for record in controls if (record["risk_id"], record["period"]) not in replaced]
-    used_control_ids = {record["control_id"] for record in remaining_controls}
     appended_controls: list[dict] = []
     for item in resolved:
         for control in item.decision.controls:
@@ -343,14 +346,28 @@ def write_versioned_workbook(source, decisions, findings, timestamp: str | None 
     output = (parent / f"audit_risk_register_{stamp}.xlsx").resolve()
     export_dir = output.with_name(f"{output.stem}_data_export")
     if output == source_path or output.exists() or export_dir.exists():
-        raise ValidationError("目标工作簿或导出目录已存在，拒绝覆盖")
+        raise ValidationError("OUTPUT_EXISTS")
     prepared = _prepare(source_path, decisions, findings)
     copied = False
     exported = False
     try:
         output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, output)
-        copied = True
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        try:
+            descriptor = os.open(output, flags, 0o600)
+        except FileExistsError as exc:
+            raise ValidationError("OUTPUT_EXISTS") from exc
+        copied = True  # Only this call can remove a file created with O_EXCL.
+        try:
+            with source_path.open("rb") as original, os.fdopen(descriptor, "wb") as versioned:
+                descriptor = None
+                shutil.copyfileobj(original, versioned, length=1024 * 1024)
+            shutil.copystat(source_path, output)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         workbook = _open_checked(output)
         _write_input_rows(workbook, prepared)
         calculation = getattr(workbook, "calculation", None)

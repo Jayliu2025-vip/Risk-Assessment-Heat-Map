@@ -8,7 +8,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -145,6 +147,21 @@ class WorkbookWriterTests(unittest.TestCase):
         self.assertFalse(any(controls.cell(row, 2).value == "R001" and controls.cell(row, 3).value == "2026H1"
                              for row in range(4, 154)))
 
+    def test_merge_control_replacement_never_reuses_removed_control_id(self) -> None:
+        decision = RiskDecision(
+            action="merge", finding_ids=("F-merge",), risk_id="R024", name="更新后的合成风险",
+            domain="采购与外包", description="更新风险描述", owner_dept="审计部",
+            period="2025H2", likelihood=5, impact_scores={dim: 4 for dim in DIMS},
+            rationale="更新后的合成依据", controls=(ConfirmedControl("替换后的控制", 5, True),),
+        )
+        result = write_versioned_workbook(self.source, (decision,), (finding("F-merge"),),
+                                          timestamp="20260903_1210", output_dir=self.root / "versions")
+        controls = load_workbook(result.workbook_path, data_only=False)["控制措施表"]
+        replacement_ids = [controls.cell(row, 1).value for row in range(4, 154)
+                           if controls.cell(row, 2).value == "R024" and controls.cell(row, 3).value == "2025H2"]
+        self.assertEqual(replacement_ids, ["C064"])
+        self.assert_source_unchanged()
+
     def test_input_writes_preserve_formula_template_and_config_export_parity(self) -> None:
         result = write_versioned_workbook(self.source, (create_decision(),), (finding("F-create"),),
                                           timestamp="20260903_1204", output_dir=self.root / "versions")
@@ -179,6 +196,32 @@ class WorkbookWriterTests(unittest.TestCase):
                 write_versioned_workbook(source, (create_decision(),), (finding("F-create"),),
                                          timestamp="20260903_1206", output_dir=self.root / "failures")
             self.assertFalse((self.root / "failures" / "audit_risk_register_20260903_1206.xlsx").exists())
+
+    def test_same_output_name_is_exclusively_created_by_one_concurrent_writer(self) -> None:
+        destination = self.root / "versions"
+        start = threading.Barrier(2)
+
+        def attempt():
+            start.wait(timeout=5)
+            try:
+                return write_versioned_workbook(
+                    self.source, (create_decision(),), (finding("F-create"),),
+                    timestamp="20260903_1211", output_dir=destination,
+                )
+            except Exception as exc:  # The public API intentionally returns safe errors.
+                return exc
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(lambda _: attempt(), range(2)))
+        winners = [outcome for outcome in outcomes if isinstance(outcome, WorkbookWriteResult)]
+        losers = [outcome for outcome in outcomes if isinstance(outcome, Exception)]
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(len(losers), 1)
+        self.assertEqual(str(losers[0]), "OUTPUT_EXISTS")
+        self.assertTrue(winners[0].workbook_path.is_file())
+        self.assertGreater(winners[0].workbook_path.stat().st_size, 0)
+        self.assertIn("风险登记册", load_workbook(winners[0].workbook_path, data_only=False).sheetnames)
+        self.assert_source_unchanged()
 
     def test_merge_requires_existing_exact_risk_period_and_create_id_is_valid_unused(self) -> None:
         missing = merge_decision()
