@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 from pathlib import Path
+import threading
 from typing import Any, Callable
 
 from .bridge import DesktopBridge
@@ -40,6 +41,13 @@ def build_bridge(*, state_path: Path | None = None, temp_path: Path | None = Non
     credentials = credential_store or CredentialStore()
     credentials.assert_windows_backend()
     catalog = _catalog(resource_provider)
+    profile_lock = threading.RLock()
+
+    def profile_and_key(name: str):
+        with profile_lock:
+            profile = next((item for item in store.list_model_profiles() if item.name == name), None)
+            return profile, credentials.get_api_key(name)
+
     pipeline = AnalysisPipeline(
         store, TaskTempFiles(temp_path or temp_root()),
         lambda source, task_dir: extract_report(source, task_dir, RapidOcrEngine()),
@@ -47,10 +55,11 @@ def build_bridge(*, state_path: Path | None = None, temp_path: Path | None = Non
         lambda name: next((item for item in store.list_model_profiles() if item.name == name), None),
         credentials.get_api_key,
         catalog,
+        profile_credential_resolver=profile_and_key,
     )
     return DesktopBridge(store=store, pipeline=pipeline, credential_store=credentials,
                          model_client_factory=ModelClient, workbook_writer=workbook_writer,
-                         risk_catalog=catalog)
+                         risk_catalog=catalog, profile_lock=profile_lock)
 
 
 def _startup_error_page() -> str:
@@ -59,6 +68,9 @@ def _startup_error_page() -> str:
 
 
 def _close_pipeline(bridge: Any) -> None:
+    if getattr(bridge, "_desktop_pipeline_closed", False):
+        return
+    setattr(bridge, "_desktop_pipeline_closed", True)
     pipeline = getattr(bridge, "_pipeline", None)
     if pipeline is None:
         pipeline = getattr(bridge, "pipeline", None)
@@ -73,16 +85,20 @@ def main(*, webview_module: Any | None = None, bridge_factory: Callable[[], Any]
         import webview as webview_module
     bridge = None
     try:
-        bridge = bridge_factory()
-        url = resource_provider("web/risk_heatmap.html").as_uri()
-    except Exception:
-        url = _startup_error_page()
-    window = webview_module.create_window(title="审计风险评估热力图谱", url=url, js_api=bridge,
-                                          width=1440, height=920, min_size=(1120, 720))
-    if bridge is not None:
-        bridge.attach_window(window)
-        window.events.closed += lambda: _close_pipeline(bridge)
-    webview_module.start(gui="edgechromium", private_mode=True, debug=False)
+        try:
+            bridge = bridge_factory()
+            url = resource_provider("web/risk_heatmap.html").as_uri()
+        except Exception:
+            url = _startup_error_page()
+        window = webview_module.create_window(title="审计风险评估热力图谱", url=url, js_api=bridge,
+                                              width=1440, height=920, min_size=(1120, 720))
+        if bridge is not None:
+            bridge.attach_window(window)
+            window.events.closed += lambda: _close_pipeline(bridge)
+        webview_module.start(gui="edgechromium", private_mode=True, debug=False)
+    finally:
+        if bridge is not None:
+            _close_pipeline(bridge)
 
 
 if __name__ == "__main__":

@@ -212,19 +212,25 @@ class DesktopStore:
         ids = [item.finding_id for item in all_items]
         if len(ids) != len(set(ids)):
             raise ValidationError("finding_id不得重复")
-        existing = {item.finding_id for item in self.list_findings(task_id)}
-        if any(item.finding_id not in existing for item in checked_updates):
-            raise KeyError("finding not found")
-        if any(item.finding_id in existing for item in checked_additions):
-            raise ValidationError("拆分finding_id已存在")
         columns = ", ".join(_FINDING_COLUMNS)
         placeholders = ", ".join("?" for _ in _FINDING_COLUMNS)
         assignments = ", ".join(f"{column}=excluded.{column}" for column in _FINDING_COLUMNS if column not in {"task_id", "finding_id"})
         connection = self._connect()
         try:
-            with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                rows = connection.execute("SELECT finding_id FROM findings WHERE task_id = ?", (task_id,)).fetchall()
+                existing = {row["finding_id"] for row in rows}
+                if any(item.finding_id not in existing for item in checked_updates):
+                    raise KeyError("finding not found")
+                if any(item.finding_id in existing for item in checked_additions):
+                    raise ValidationError("拆分finding_id已存在")
                 for item in all_items:
                     connection.execute(f"INSERT INTO findings ({columns}) VALUES ({placeholders}) ON CONFLICT(task_id, finding_id) DO UPDATE SET {assignments}", self._finding_values(item))
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
         finally:
             connection.close()
         return all_items

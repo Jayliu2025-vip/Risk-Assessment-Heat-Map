@@ -7,6 +7,7 @@ import hashlib
 import inspect
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 
 from desktop.models import AnalysisTask, FindingDraft, ModelProfile
@@ -46,6 +47,7 @@ class CredentialMemory:
     def get_password(self, service, name): return self.values.get((service, name))
     def set_api_key(self, name, secret): self.values[name] = secret
     def get_api_key(self, name): return self.values.get(name)
+    def delete_api_key(self, name): self.values.pop(name, None)
 
 
 class Pipeline:
@@ -140,6 +142,17 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(tested, {"ok": True, "hostname": "model.example.test"})
         self.assertNotIn("sk-synthetic-secret", str(self.bridge.get_bootstrap()))
 
+    def test_profile_key_pair_rolls_back_if_profile_persistence_fails(self):
+        self.bridge.save_model_profile(self.profile())
+        old = self.store.list_model_profiles()[0]
+        self.store.save_model_profile = lambda profile: (_ for _ in ()).throw(RuntimeError("C:\\secret\\sk-new"))
+        changed = {**self.profile(), "base_url": "https://new.example.test", "api_key": "sk-new"}
+        result = self.bridge.save_model_profile(changed)
+        self.assertFalse(result["ok"])
+        self.assertEqual(self.bridge._credential_store.get_api_key("synthetic"), "sk-synthetic-secret")
+        self.assertEqual(old.base_url, "https://model.example.test")
+        self.assertNotIn("sk-new", str(result))
+
     def test_start_task_findings_are_serializable_and_never_source_path(self):
         self.bridge.save_model_profile(self.profile())
         selected = self.select(self.report)
@@ -174,6 +187,45 @@ class DesktopBridgeTests(unittest.TestCase):
         self.bridge._task_sources["T-docx"] = (docx, token)
         preview = self.bridge.get_source_preview("T-docx", "F-docx")
         self.assertEqual(preview, {"ok": True, "kind": "text", "source_page": "第 2 段", "source_excerpt": "有限摘录"})
+
+    def test_pdf_preview_renders_private_snapshot_and_rejects_oversized_png(self):
+        self.seed_task()
+        selected = self.select(self.report)
+        seen = []
+        def renderer(path, page):
+            seen.append(Path(path))
+            self.report.write_bytes(b"replaced after snapshot")
+            return b"small-png"
+        self.bridge._pdf_preview_renderer = renderer
+        self.bridge._task_sources["T-1"] = (self.report, selected["selection_token"])
+        result = self.bridge.get_source_preview("T-1", "F-1")
+        self.assertTrue(result["ok"])
+        self.assertNotEqual(seen[0], self.report)
+        import desktop.bridge as bridge_module
+        previous = bridge_module.MAX_PREVIEW_PNG_BYTES
+        bridge_module.MAX_PREVIEW_PNG_BYTES = 3
+        try:
+            self.report.write_bytes(b"synthetic-pdf")
+            self.assertEqual(self.bridge.get_source_preview("T-1", "F-1")["code"], "PREVIEW_TOO_LARGE")
+        finally:
+            bridge_module.MAX_PREVIEW_PNG_BYTES = previous
+
+    def test_preview_busy_is_safe_and_commit_token_is_consumed_once(self):
+        self.seed_task()
+        selected = self.select(self.report)
+        self.assertTrue(self.bridge._preview_slots.acquire(blocking=False))
+        try:
+            self.assertEqual(self.bridge.get_source_preview("T-1", "F-1", selected["selection_token"])["code"], "PREVIEW_BUSY")
+        finally:
+            self.bridge._preview_slots.release()
+        selected = self.select(self.workbook, "workbook")
+        decision = [{"action": "exclude", "finding_ids": ["F-1"]}]
+        preview = self.bridge.preview_commit("T-1", selected["selection_token"], decision)
+        first = self.bridge.commit_to_workbook("T-1", selected["selection_token"], decision, preview["commit_token"])
+        self.assertTrue(first["ok"])
+        second = self.bridge.commit_to_workbook("T-1", selected["selection_token"], decision, preview["commit_token"])
+        self.assertEqual(second["code"], "PREVIEW_REQUIRED")
+        self.assertEqual(len(self.writer.commit_calls), 1)
 
     def test_source_preview_reattaches_a_matching_report_after_bridge_restart(self):
         self.seed_task()
@@ -230,7 +282,7 @@ class DesktopBridgeTests(unittest.TestCase):
         preview = self.bridge.preview_commit("T-1", selected["selection_token"], [decision])
         self.assertEqual(preview["commit_token"], "token-1")
         bad = self.bridge.commit_to_workbook("T-1", selected["selection_token"], [decision], "wrong")
-        self.assertEqual(bad["code"], "PREVIEW_STALE")
+        self.assertEqual(bad["code"], "PREVIEW_REQUIRED")
         done = self.bridge.commit_to_workbook("T-1", selected["selection_token"], [decision], "token-1")
         self.assertEqual(done["workbook_path"], str(Path("C:/synthetic/out.xlsx")))
         self.assertEqual(done["export_dir"], str(Path("C:/synthetic/export")))

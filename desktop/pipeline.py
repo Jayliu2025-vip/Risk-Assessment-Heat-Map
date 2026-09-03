@@ -61,6 +61,7 @@ class AnalysisPipeline:
         credential_resolver: Callable[[str], str | None],
         risk_catalog: Iterable[Any] = (),
         *,
+        profile_credential_resolver: Callable[[str], tuple[ModelProfile | None, str | None]] | None = None,
         clock: Callable[[], datetime] | None = None,
         uuid_factory: Callable[[], Any] = uuid4,
         executor: ThreadPoolExecutor | None = None,
@@ -71,6 +72,7 @@ class AnalysisPipeline:
         self.model_client_factory = model_client_factory
         self.profile_resolver = profile_resolver
         self.credential_resolver = credential_resolver
+        self.profile_credential_resolver = profile_credential_resolver
         self.risk_catalog = list(risk_catalog)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.uuid_factory = uuid_factory
@@ -436,8 +438,11 @@ class AnalysisPipeline:
                 cached = [] if runtime is None else list(runtime.images)
             if task is None or evidence is None:
                 raise ValueError("missing in-process extraction cache")
-            profile = self.profile_resolver(task.model_profile)
-            credential = self.credential_resolver(task.model_profile)
+            if self.profile_credential_resolver is None:
+                profile = self.profile_resolver(task.model_profile)
+                credential = self.credential_resolver(task.model_profile)
+            else:
+                profile, credential = self.profile_credential_resolver(task.model_profile)
             if not isinstance(profile, ModelProfile) or not isinstance(credential, str) or not credential.strip():
                 raise ValueError("model configuration unavailable")
             images = self._temporary_images(task_id, cached)

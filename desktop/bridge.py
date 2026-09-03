@@ -9,15 +9,19 @@ import hashlib
 from pathlib import Path
 import re
 import secrets
+import tempfile
+import threading
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlparse
 
-from .extraction import ExtractionError, MAX_PDF_PAGES, MAX_RENDER_PIXELS, PDF_RENDER_SCALE
+from .extraction import ExtractionError, MAX_PDF_PAGES, MAX_RENDER_PIXELS, MAX_SOURCE_BYTES, PDF_RENDER_SCALE
 from .model_client import ModelError
 from .models import ConfirmedControl, FindingDraft, ModelProfile, RiskDecision, ValidationError
 
 
 _PAGE = re.compile(r"^第 ([1-9][0-9]*) 页$")
+MAX_PREVIEW_PIXELS = 8_000_000
+MAX_PREVIEW_PNG_BYTES = 5 * 1024 * 1024
 
 
 class _BridgeError(Exception):
@@ -31,6 +35,19 @@ def _file_hash(path: Path) -> str:
     with path.open("rb") as handle:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _snapshot_preview_source(source: Path, destination: Path) -> str:
+    digest = hashlib.sha256()
+    copied = 0
+    with source.open("rb") as input_file, destination.open("xb") as output_file:
+        while chunk := input_file.read(1024 * 1024):
+            copied += len(chunk)
+            if copied > MAX_SOURCE_BYTES:
+                raise ExtractionError("SOURCE_TOO_LARGE", "输入文件超过安全大小限制")
+            digest.update(chunk)
+            output_file.write(chunk)
     return digest.hexdigest()
 
 
@@ -70,7 +87,7 @@ class DesktopBridge:
     def __init__(self, *, store: Any, pipeline: Any, credential_store: Any,
                  model_client_factory: Callable[[ModelProfile, str], Any], workbook_writer: Any,
                  risk_catalog: Iterable[Mapping[str, Any]], pdf_preview_renderer: Callable[[Path, int], bytes] | None = None,
-                 webview_module: Any | None = None) -> None:
+                 webview_module: Any | None = None, profile_lock: threading.RLock | None = None) -> None:
         self._store = store
         self._pipeline = pipeline
         self._credential_store = credential_store
@@ -83,6 +100,10 @@ class DesktopBridge:
         self._selections: dict[str, tuple[Path, str]] = {}
         self._task_sources: dict[str, tuple[Path, str]] = {}
         self._commit_previews: dict[str, tuple[str, str, tuple[RiskDecision, ...]]] = {}
+        self._profile_lock = profile_lock or threading.RLock()
+        self._task_locks: dict[str, threading.RLock] = {}
+        self._task_locks_guard = threading.Lock()
+        self._preview_slots = threading.BoundedSemaphore(1)
 
     def __getattr__(self, name: str) -> Any:
         # Window attachment is an application bootstrap hook, not a JS API.
@@ -92,6 +113,12 @@ class DesktopBridge:
 
     def _attach_window(self, window: Any) -> None:
         self._window = window
+
+    def _task_lock(self, task_id: Any) -> threading.RLock:
+        if not isinstance(task_id, str) or not task_id:
+            raise ValidationError("task_id不能为空")
+        with self._task_locks_guard:
+            return self._task_locks.setdefault(task_id, threading.RLock())
 
     def _selection(self, token: Any, purpose: str) -> Path:
         if not isinstance(token, str) or token not in self._selections:
@@ -157,7 +184,8 @@ class DesktopBridge:
                 raise _BridgeError("SOURCE_PAGE_INVALID", "来源页码不可用")
             page = document[page_number - 1]
             width, height = page.get_size()
-            if int(width * PDF_RENDER_SCALE + .999) * int(height * PDF_RENDER_SCALE + .999) > MAX_RENDER_PIXELS:
+            pixels = int(width * PDF_RENDER_SCALE + .999) * int(height * PDF_RENDER_SCALE + .999)
+            if pixels > min(MAX_RENDER_PIXELS, MAX_PREVIEW_PIXELS):
                 raise ExtractionError("PDF_RENDER_LIMIT", "PDF页面超出安全限制")
             bitmap = page.render(scale=PDF_RENDER_SCALE)
             image = bitmap.to_pil()
@@ -200,22 +228,33 @@ class DesktopBridge:
     @_public
     def save_model_profile(self, profile: Any) -> dict[str, Any]:
         checked, key = self._profile_payload(profile)
-        self._store.save_model_profile(checked)
-        self._credential_store.set_api_key(checked.name, key)
+        with self._profile_lock:
+            previous = next((item for item in self._store.list_model_profiles() if item.name == checked.name), None)
+            old_key = self._credential_store.get_api_key(checked.name)
+            self._credential_store.set_api_key(checked.name, key)
+            try:
+                self._store.save_model_profile(checked)
+            except Exception:
+                if old_key:
+                    self._credential_store.set_api_key(checked.name, old_key)
+                else:
+                    self._credential_store.delete_api_key(checked.name)
+                raise
         return {"profile": asdict(checked)}
 
     @_public
     def test_model_profile(self, profile_name: Any) -> dict[str, Any]:
-        profile = self._get_profile(profile_name)
-        key = self._credential_store.get_api_key(profile.name)
-        if not key:
-            raise _BridgeError("MODEL_CREDENTIAL_NOT_FOUND", "未找到模型密钥")
-        client = self._model_client_factory(profile, key)
-        try:
-            client.test_connection()
-        finally:
-            close = getattr(client, "close", None)
-            if callable(close): close()
+        with self._profile_lock:
+            profile = self._get_profile(profile_name)
+            key = self._credential_store.get_api_key(profile.name)
+            if not key:
+                raise _BridgeError("MODEL_CREDENTIAL_NOT_FOUND", "未找到模型密钥")
+            client = self._model_client_factory(profile, key)
+            try:
+                client.test_connection()
+            finally:
+                close = getattr(client, "close", None)
+                if callable(close): close()
         return {"hostname": urlparse(profile.base_url).hostname or ""}
 
     @_public
@@ -238,6 +277,14 @@ class DesktopBridge:
 
     @_public
     def get_source_preview(self, task_id: Any, finding_id: Any, selection_token: Any = None) -> dict[str, Any]:
+        if not self._preview_slots.acquire(blocking=False):
+            raise _BridgeError("PREVIEW_BUSY", "来源预览正在生成，请稍后重试")
+        try:
+            return self._get_source_preview(task_id, finding_id, selection_token)
+        finally:
+            self._preview_slots.release()
+
+    def _get_source_preview(self, task_id: Any, finding_id: Any, selection_token: Any = None) -> dict[str, Any]:
         task = self._store.get_task(task_id)
         source_info = self._task_sources.get(task_id)
         if task is None:
@@ -246,37 +293,51 @@ class DesktopBridge:
             if selection_token is None:
                 raise _BridgeError("SOURCE_RESELECT_REQUIRED", "请重新选择原始报告以查看来源")
             source = self._selection(selection_token, "report")
-            if _file_hash(source) != task.file_hash:
-                raise _BridgeError("SOURCE_HASH_CHANGED", "原始报告与任务不一致，请重新选择")
             source_info = (source, str(selection_token))
             self._task_sources[task_id] = source_info
         finding = self._get_finding(task_id, finding_id)
         source, _ = source_info
         if not source.is_file():
             raise _BridgeError("SOURCE_RESELECT_REQUIRED", "请重新选择原始报告以查看来源")
-        if _file_hash(source) != task.file_hash:
-            raise _BridgeError("SOURCE_HASH_CHANGED", "原始报告已变更，请重新选择")
-        if source.suffix.lower() == ".docx":
-            return {"kind": "text", "source_page": finding.source_page, "source_excerpt": finding.source_excerpt}
-        page = _PAGE.fullmatch(finding.source_page)
-        if page is None:
-            raise _BridgeError("SOURCE_PAGE_INVALID", "来源页码格式无效")
-        data = self._pdf_preview_renderer(source, int(page.group(1)))
-        if not isinstance(data, bytes) or not data:
-            raise ExtractionError("PDF_RENDER_FAILED", "PDF页面渲染失败")
-        return {"kind": "pdf", "source_page": finding.source_page,
-                "image_data_url": "data:image/png;base64," + base64.b64encode(data).decode("ascii")}
+        try:
+            with tempfile.TemporaryDirectory(prefix="rahm-preview-") as directory:
+                snapshot = Path(directory) / f"source{source.suffix.lower()}"
+                if _snapshot_preview_source(source, snapshot) != task.file_hash:
+                    raise _BridgeError("SOURCE_HASH_CHANGED", "原始报告已变更，请重新选择")
+                if source.suffix.lower() == ".docx":
+                    return {"kind": "text", "source_page": finding.source_page, "source_excerpt": finding.source_excerpt}
+                page = _PAGE.fullmatch(finding.source_page)
+                if page is None:
+                    raise _BridgeError("SOURCE_PAGE_INVALID", "来源页码格式无效")
+                data = self._pdf_preview_renderer(snapshot, int(page.group(1)))
+                if not isinstance(data, bytes) or not data:
+                    raise ExtractionError("PDF_RENDER_FAILED", "PDF页面渲染失败")
+                if len(data) > MAX_PREVIEW_PNG_BYTES:
+                    raise _BridgeError("PREVIEW_TOO_LARGE", "来源预览超过安全大小限制")
+                return {"kind": "pdf", "source_page": finding.source_page,
+                        "image_data_url": "data:image/png;base64," + base64.b64encode(data).decode("ascii")}
+        except _BridgeError:
+            raise
+        except ExtractionError:
+            raise
+        except Exception:
+            raise _BridgeError("SOURCE_RESELECT_REQUIRED", "原始报告不可用，请重新选择") from None
 
     @_public
     def save_finding(self, task_id: Any, finding_id: Any, payload: Any) -> dict[str, Any]:
-        if not isinstance(payload, Mapping): raise ValidationError("finding必须是对象")
-        self._get_finding(task_id, finding_id)
-        edited = dict(payload); edited["task_id"], edited["finding_id"] = task_id, finding_id
-        saved = self._pipeline.review_findings(task_id, [FindingDraft(**edited)])[0]
+        with self._task_lock(task_id):
+            if not isinstance(payload, Mapping): raise ValidationError("finding必须是对象")
+            self._get_finding(task_id, finding_id)
+            edited = dict(payload); edited["task_id"], edited["finding_id"] = task_id, finding_id
+            saved = self._pipeline.review_findings(task_id, [FindingDraft(**edited)])[0]
         return {"finding": asdict(saved)}
 
     @_public
     def merge_findings(self, task_id: Any, finding_ids: Any, payload: Any) -> dict[str, Any]:
+        with self._task_lock(task_id):
+            return self._merge_findings(task_id, finding_ids, payload)
+
+    def _merge_findings(self, task_id: Any, finding_ids: Any, payload: Any) -> dict[str, Any]:
         if not isinstance(finding_ids, (list, tuple)) or len(finding_ids) < 2 or len(set(finding_ids)) != len(finding_ids):
             raise ValidationError("至少选择两个不重复发现")
         if not isinstance(payload, Mapping): raise ValidationError("finding必须是对象")
@@ -291,6 +352,10 @@ class DesktopBridge:
 
     @_public
     def split_finding(self, task_id: Any, finding_id: Any, payloads: Any) -> dict[str, Any]:
+        with self._task_lock(task_id):
+            return self._split_finding(task_id, finding_id, payloads)
+
+    def _split_finding(self, task_id: Any, finding_id: Any, payloads: Any) -> dict[str, Any]:
         original = self._get_finding(task_id, finding_id)
         if not isinstance(payloads, (list, tuple)) or len(payloads) < 2:
             raise ValidationError("至少需要两个拆分发现")
@@ -308,36 +373,40 @@ class DesktopBridge:
 
     @_public
     def preview_commit(self, task_id: Any, workbook_selection_token: Any, decisions: Any) -> dict[str, Any]:
-        source = self._selection(workbook_selection_token, "workbook")
-        checked = self._decisions(decisions)
-        findings = tuple(self._store.list_findings(task_id))
-        preview = dict(self._workbook_writer.preview_changes(source, checked, findings))
-        token = preview.get("commit_token")
-        if not isinstance(token, str) or not token: raise _BridgeError("PREVIEW_INVALID", "提交预览无效")
-        self._commit_previews[str(workbook_selection_token)] = (str(task_id), token, checked)
+        with self._task_lock(task_id):
+            source = self._selection(workbook_selection_token, "workbook")
+            checked = self._decisions(decisions)
+            findings = tuple(self._store.list_findings(task_id))
+            preview = dict(self._workbook_writer.preview_changes(source, checked, findings))
+            token = preview.get("commit_token")
+            if not isinstance(token, str) or not token: raise _BridgeError("PREVIEW_INVALID", "提交预览无效")
+            self._commit_previews[str(workbook_selection_token)] = (str(task_id), token, checked)
         return preview
 
     @_public
     def commit_to_workbook(self, task_id: Any, workbook_selection_token: Any, decisions: Any, expected_commit_token: Any) -> dict[str, Any]:
-        source = self._selection(workbook_selection_token, "workbook")
-        checked = self._decisions(decisions)
-        remembered = self._commit_previews.get(str(workbook_selection_token))
-        if remembered is None or remembered != (str(task_id), expected_commit_token, checked):
-            raise _BridgeError("PREVIEW_STALE", "预览已失效，请重新生成")
-        result = self._workbook_writer.write_versioned_workbook(source, checked, tuple(self._store.list_findings(task_id)), expected_commit_token=expected_commit_token)
+        with self._task_lock(task_id):
+            source = self._selection(workbook_selection_token, "workbook")
+            checked = self._decisions(decisions)
+            remembered = self._commit_previews.get(str(workbook_selection_token))
+            if remembered is None or remembered != (str(task_id), expected_commit_token, checked):
+                raise _BridgeError("PREVIEW_REQUIRED", "请重新生成提交预览")
+            self._commit_previews.pop(str(workbook_selection_token), None)
+            result = self._workbook_writer.write_versioned_workbook(source, checked, tuple(self._store.list_findings(task_id)), expected_commit_token=expected_commit_token)
         return {"workbook_path": str(result.workbook_path), "export_dir": str(result.export_dir),
                 "periods": list(result.periods), "assessed_risks": list(result.assessed_risks)}
 
     @_public
     def cleanup_task(self, task_id: Any) -> dict[str, Any]:
-        if not isinstance(task_id, str) or not task_id: raise ValidationError("task_id不能为空")
-        cleanup = getattr(self._pipeline, "cleanup_task", None)
-        if callable(cleanup): cleanup(task_id)
-        source_info = self._task_sources.pop(task_id, None)
-        if source_info is not None:
-            self._selections.pop(source_info[1], None)
-        for token, preview in list(self._commit_previews.items()):
-            if preview[0] == task_id:
-                self._commit_previews.pop(token, None)
-                self._selections.pop(token, None)
+        with self._task_lock(task_id):
+            if not isinstance(task_id, str) or not task_id: raise ValidationError("task_id不能为空")
+            cleanup = getattr(self._pipeline, "cleanup_task", None)
+            if callable(cleanup): cleanup(task_id)
+            source_info = self._task_sources.pop(task_id, None)
+            if source_info is not None:
+                self._selections.pop(source_info[1], None)
+            for token, preview in list(self._commit_previews.items()):
+                if preview[0] == task_id:
+                    self._commit_previews.pop(token, None)
+                    self._selections.pop(token, None)
         return {"task_id": task_id}
