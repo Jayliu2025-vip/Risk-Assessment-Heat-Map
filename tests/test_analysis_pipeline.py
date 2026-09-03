@@ -154,6 +154,42 @@ class StartPersistenceFailureStore(TrackingStore):
         raise sqlite3.OperationalError("synthetic start persistence failure")
 
 
+class AnalysisTransitionFailureStore(TrackingStore):
+    def __init__(self, path: Path) -> None:
+        self.fail_once = True
+        super().__init__(path)
+
+    def save_task(self, task):
+        if self.fail_once and task.status == "分析中":
+            self.fail_once = False
+            raise sqlite3.OperationalError("synthetic analysis transition failure")
+        return super().save_task(task)
+
+
+class FailureRaceStore(TrackingStore):
+    def __init__(self, path: Path) -> None:
+        self.arm_failure_get = threading.Event()
+        self.failure_get_entered = threading.Event()
+        self.release_failure_get = threading.Event()
+        super().__init__(path)
+
+    def get_task(self, task_id: str):
+        if self.arm_failure_get.is_set() and not self.failure_get_entered.is_set():
+            self.failure_get_entered.set()
+            self.release_failure_get.wait(2)
+        return super().get_task(task_id)
+
+
+class FailureRaceModel(FakeModel):
+    def __init__(self, store: FailureRaceStore) -> None:
+        super().__init__()
+        self.store = store
+
+    def analyze(self, task_id: str, evidence: str, catalog: list[dict], images: list[Path]) -> list[FindingDraft]:
+        self.store.arm_failure_get.set()
+        raise RuntimeError("synthetic model failure")
+
+
 class PipelineTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -376,6 +412,32 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError):
             pipeline.start(self.source, "synthetic")
         self.assertEqual(list(tasks.root.iterdir()) if tasks.root.exists() else [], [])
+
+    def test_analysis_transition_store_failure_is_sanitized_without_wait_escape(self) -> None:
+        store = AnalysisTransitionFailureStore(self.root / "transition-failure.sqlite3")
+        pipeline = AnalysisPipeline(store, self.tasks, FakeExtractor(), FakeFactory(FakeModel()), lambda name: self.profile, lambda name: "secret-key", self.catalog)
+        self.addCleanup(pipeline.close)
+        task = pipeline.start(self.source, "synthetic")
+        self.assertEqual(pipeline.wait(task.task_id, 2).status, "失败")
+        self.assertEqual(pipeline.events(task.task_id)[-1]["code"], "EXTRACTION_FAILED")
+        self.assertFalse(self.tasks.task_dir(task.task_id).exists())
+
+    def test_cancel_wins_over_failure_diagnostic_race(self) -> None:
+        store = FailureRaceStore(self.root / "failure-race.sqlite3")
+        model = FailureRaceModel(store)
+        pipeline = AnalysisPipeline(store, self.tasks, FakeExtractor(), FakeFactory(model), lambda name: self.profile, lambda name: "secret-key", self.catalog)
+        self.addCleanup(pipeline.close)
+        task = pipeline.start(self.source, "synthetic")
+        self.assertTrue(store.failure_get_entered.wait(1))
+        cancelled = pipeline.cancel(task.task_id)
+        store.release_failure_get.set()
+        self.assertEqual(pipeline.wait(task.task_id, 2).status, "失败")
+        codes = [event["code"] for event in pipeline.events(task.task_id)]
+        if cancelled:
+            self.assertEqual(codes[-1], "TASK_CANCELLED")
+            self.assertNotIn("MODEL_FAILED", codes)
+        else:
+            self.assertEqual(codes[-1], "MODEL_FAILED")
 
     def test_cleanup_residue_is_safe_and_source_is_untouched(self) -> None:
         class FailingCleanup(TaskTempFiles):

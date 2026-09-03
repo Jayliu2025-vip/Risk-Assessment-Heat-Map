@@ -219,9 +219,15 @@ class AnalysisPipeline:
             return bool(runtime and runtime.cancellation.is_set())
 
     def _cleanup(self, task_id: str) -> None:
-        residual = self.temp_files.cleanup(task_id)
+        try:
+            residual = self.temp_files.cleanup(task_id)
+        except Exception:
+            residual = [self.temp_files.task_dir(task_id)]
         if residual:
-            task = self.store.get_task(task_id)
+            try:
+                task = self.store.get_task(task_id)
+            except Exception:
+                task = None
             if task is not None:
                 # A task-scoped relative marker enables recovery without exposing
                 # a source path, report content, or an arbitrary filesystem path.
@@ -233,10 +239,25 @@ class AnalysisPipeline:
             if runtime is not None:
                 runtime.retry_in_progress = False
 
+    def _cancel_failure_locked(self, task_id: str) -> None:
+        """Record an accepted cancellation without allowing diagnostics to win."""
+        try:
+            task = self.store.get_task(task_id)
+        except Exception:
+            task = None
+        if task is None or task.status == "失败":
+            return
+        for _ in range(2):
+            try:
+                self._set_status(task, "失败", "TASK_CANCELLED", "任务已取消")
+                return
+            except Exception:
+                continue
+        self._event(task_id, "失败", "TASK_CANCELLED", "任务已取消")
+
     def _cancel_failure(self, task_id: str) -> None:
-        task = self.store.get_task(task_id)
-        if task is not None and task.status != "失败":
-            self._set_status(task, "失败", "TASK_CANCELLED", "任务已取消")
+        with self._lock:
+            self._cancel_failure_locked(task_id)
 
     def cancel(self, task_id: str) -> bool:
         with self._lock:
@@ -251,24 +272,37 @@ class AnalysisPipeline:
             if task.status in ("待复核", "已完成", "失败"):
                 return False
             runtime.cancellation.set()
-            self._cancel_failure(task_id)
+            self._cancel_failure_locked(task_id)
             return True
 
+    def _fail(self, task_id: str, exc: Exception, fallback: str, message: str) -> None:
+        """Best-effort terminal failure that cannot race an accepted cancel."""
+        code = self._code(getattr(exc, "code", None), fallback)
+        with self._lock:
+            runtime = self._runtime.get(task_id)
+            if runtime is not None and runtime.cancellation.is_set():
+                self._cancel_failure_locked(task_id)
+                return
+            try:
+                task = self.store.get_task(task_id)
+            except Exception:
+                self._event(task_id, "失败", code, message)
+                return
+            if task is None or task.status in ("失败", "待复核", "已完成"):
+                return
+            for _ in range(2):
+                try:
+                    self._set_status(task, "失败", code, message)
+                    return
+                except Exception:
+                    continue
+            self._event(task_id, "失败", code, message)
+
     def _extraction_failure(self, task_id: str, exc: Exception) -> None:
-        if self._cancelled(task_id):
-            self._cancel_failure(task_id)
-            return
-        task = self.store.get_task(task_id)
-        if task is not None:
-            self._set_status(task, "失败", self._code(getattr(exc, "code", None), "EXTRACTION_FAILED"), "报告提取失败")
+        self._fail(task_id, exc, "EXTRACTION_FAILED", "报告提取失败")
 
     def _model_failure(self, task_id: str, exc: Exception) -> None:
-        if self._cancelled(task_id):
-            self._cancel_failure(task_id)
-            return
-        task = self.store.get_task(task_id)
-        if task is not None:
-            self._set_status(task, "失败", self._code(getattr(exc, "code", None), "MODEL_FAILED"), "风险分析失败")
+        self._fail(task_id, exc, "MODEL_FAILED", "风险分析失败")
 
     @staticmethod
     def _validated_findings(task_id: str, findings: Iterable[Any]) -> list[FindingDraft]:
@@ -340,6 +374,8 @@ class AnalysisPipeline:
                 runtime.evidence = evidence
                 runtime.images = images
             self._run_model(task_id, catalog)
+        except Exception as exc:
+            self._extraction_failure(task_id, exc)
         finally:
             self._cleanup(task_id)
             self._release_retry_reservation(task_id)
