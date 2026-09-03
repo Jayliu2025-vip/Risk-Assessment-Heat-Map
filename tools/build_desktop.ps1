@@ -30,8 +30,12 @@ foreach ($path in @($BuildPath, $DistPath, $InstallerPath, $LicensePath)) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
 }
 
-& $PythonExe -c "import importlib.metadata as m; assert m.version('PyInstaller') == '6.22.2'; import rapidocr, pypdfium2, onnxruntime, webview, keyring"
+& $PythonExe -c "import sys, platform, importlib.metadata as m; assert sys.version_info[:2] == (3, 13) and platform.architecture()[0] == '64bit', 'PYTHON_3_13_X64_REQUIRED'; assert m.version('PyInstaller') == '6.22.2'; import rapidocr, pypdfium2, onnxruntime, webview, keyring"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $PythonExe -m pip check
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $PythonExe -c "from rapidocr import RapidOCR; engine=RapidOCR(); assert engine is not None"
+if ($LASTEXITCODE -ne 0) { Write-Error 'RAPIDOCR_ENVIRONMENT_CHECK_FAILED'; exit $LASTEXITCODE }
 if (-not $SkipTests) {
     & $PythonExe -m unittest discover -s (Join-Path $RepoRoot 'tests') -p 'test_*.py'
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

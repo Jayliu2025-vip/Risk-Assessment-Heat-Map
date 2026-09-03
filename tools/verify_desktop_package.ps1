@@ -15,15 +15,35 @@ function Invoke-ExactSmoke([string]$Exe) {
     $id = [guid]::NewGuid().ToString('N')
     $stdout = Join-Path $base "rahm-smoke-$id.out"
     $stderr = Join-Path $base "rahm-smoke-$id.err"
+    $process = $null
     try {
-        $process = Start-Process -FilePath $Exe -ArgumentList '--synthetic-smoke' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -Wait
+        $process = Start-Process -FilePath $Exe -ArgumentList '--synthetic-smoke' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -WindowStyle Hidden -PassThru
+        $deadline = (Get-Date).AddSeconds(120)
+        while ((Get-Date) -lt $deadline -and -not $process.HasExited) {
+            Start-Sleep -Milliseconds 100
+            $process.Refresh()
+        }
+        if (-not $process.HasExited) {
+            Stop-Process -Id $process.Id -Force
+            throw 'SMOKE_TIMEOUT'
+        }
         $result = if (Test-Path -LiteralPath $stdout) { [System.IO.File]::ReadAllText($stdout) } else { '' }
         $errors = if (Test-Path -LiteralPath $stderr) { [System.IO.File]::ReadAllText($stderr) } else { '' }
         if ($process.ExitCode -ne 0 -or $errors -ne '' -or $result -ne "PACKAGED_DESKTOP_SMOKE_OK`n") { throw 'PACKAGED_SMOKE_FAILED' }
     } finally {
+        if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
         if (Test-Path -LiteralPath $stdout) { Remove-Item -LiteralPath $stdout -Force }
         if (Test-Path -LiteralPath $stderr) { Remove-Item -LiteralPath $stderr -Force }
     }
+}
+
+function Test-DirectoryAbsentOrEmpty([string]$Path) {
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $true }
+        return -not (Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop | Select-Object -First 1)
+    } catch [System.IO.DirectoryNotFoundException] { return $true
+    } catch [System.Management.Automation.ItemNotFoundException] { return $true
+    } catch { return $false }
 }
 
 function Invoke-BoundedInstaller([string]$Exe, [string[]]$Arguments, [string]$Phase, [string]$LogPath, [scriptblock]$CompletionProbe) {
@@ -61,10 +81,10 @@ try {
     Invoke-BoundedInstaller $InstallerPath @('/VERYSILENT', '/SUPPRESSMSGBOXES', "/DIR=$installRoot", "/LOG=$installLog") 'INSTALL' $installLog { (Test-Path -LiteralPath $installedExe -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $installRoot 'unins000.exe') -PathType Leaf) -and (Test-InnoLog $installLog 'Installation process succeeded.') }
     Invoke-ExactSmoke $installedExe
     $uninstaller = Join-Path $installRoot 'unins000.exe'
-    Invoke-BoundedInstaller $uninstaller @('/VERYSILENT', '/SUPPRESSMSGBOXES', "/LOG=$uninstallLog") 'UNINSTALL' $uninstallLog { ((-not (Test-Path -LiteralPath $installRoot)) -or (-not (Get-ChildItem -LiteralPath $installRoot -Force | Select-Object -First 1))) -and (Test-InnoLog $uninstallLog 'Uninstallation process succeeded.') }
+    Invoke-BoundedInstaller $uninstaller @('/VERYSILENT', '/SUPPRESSMSGBOXES', "/LOG=$uninstallLog") 'UNINSTALL' $uninstallLog { (Test-DirectoryAbsentOrEmpty $installRoot) -and (Test-InnoLog $uninstallLog 'Uninstallation process succeeded.') }
     $running = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $installedExe -and $_.ProcessId -ne $PID }
     if ($running) { throw 'PROCESS_STILL_RUNNING' }
-    if ((Test-Path -LiteralPath $installRoot) -and (Get-ChildItem -LiteralPath $installRoot -Force | Select-Object -First 1)) { throw 'INSTALL_DIRECTORY_NOT_REMOVED' }
+    if (-not (Test-DirectoryAbsentOrEmpty $installRoot)) { throw 'INSTALL_DIRECTORY_NOT_REMOVED' }
     $verified = $true
 } finally {
     if ($verified -and (Test-Path -LiteralPath $installRoot)) { Remove-Item -LiteralPath $installRoot -Force }

@@ -24,6 +24,7 @@ binaries = []
 for package in ("rapidocr", "pypdfium2", "onnxruntime"):
     datas += collect_data_files(package)
     binaries += collect_dynamic_libs(package)
+datas += collect_data_files("keyring")
 
 hiddenimports = [
     "desktop.smoke",

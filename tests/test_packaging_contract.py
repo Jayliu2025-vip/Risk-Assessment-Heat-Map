@@ -33,6 +33,7 @@ class PackagingContractTests(unittest.TestCase):
             "pypdfium2",
             "webview.platforms.edgechromium",
             "keyring.backends.Windows",
+            'collect_data_files("keyring")',
             "PyQt5",
             "PyQt6",
             "PySide2",
@@ -83,6 +84,9 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn("Uninstallation process succeeded.", script)
         self.assertIn("Log closed.", script)
         self.assertIn("$verified", script)
+        self.assertIn("DirectoryNotFoundException", script)
+        self.assertIn("SMOKE_TIMEOUT", script)
+        self.assertIn("-WindowStyle Hidden", script)
 
     def test_build_script_has_narrow_destructive_path_guard_and_iscc_blocker(self):
         script = (ROOT / "tools" / "build_desktop.ps1").read_text(encoding="utf-8")
@@ -97,6 +101,9 @@ class PackagingContractTests(unittest.TestCase):
             self.assertIn(allowed, script)
         self.assertNotIn("git clean", script.lower())
         self.assertNotIn("rm -rf", script.lower())
+        self.assertIn("PYTHON_3_13_X64_REQUIRED", script)
+        self.assertIn("pip check", script)
+        self.assertIn("RAPIDOCR_ENVIRONMENT_CHECK_FAILED", script)
 
     def test_license_exporter_writes_hashed_manifest_for_available_distribution(self):
         output = Path(tempfile.mkdtemp(prefix="rahm-license-test-")) / "licenses"
@@ -122,7 +129,7 @@ class PackagingContractTests(unittest.TestCase):
     def test_critical_export_requires_verified_vendored_rapidocr_model_notice(self):
         output = Path(tempfile.mkdtemp(prefix="rahm-critical-license-test-")) / "licenses"
         completed = subprocess.run(
-            [sys.executable, str(ROOT / "tools" / "export_third_party_licenses.py"), "--output", str(output)],
+            [sys.executable, str(ROOT / "tools" / "export_third_party_licenses.py"), "--output", str(output), "--packages", "RapidOCR", "--allow-noncritical"],
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -136,6 +143,28 @@ class PackagingContractTests(unittest.TestCase):
             {"PP-OCRv6_det_small.onnx", "PP-OCRv6_rec_small.onnx", "ch_ppocr_mobile_v2.0_cls_mobile.onnx"},
             set(rapidocr["vendored_provenance"]["models"]),
         )
+
+    def test_full_packaged_distribution_export_uses_verified_openpyxl_sdist_notice(self):
+        output = Path(tempfile.mkdtemp(prefix="rahm-full-license-test-")) / "licenses"
+        completed = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "export_third_party_licenses.py"), "--output", str(output)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+        openpyxl = next(record for record in manifest["packages"] if record["name"].lower() == "openpyxl")
+        self.assertEqual("pypi_sdist", openpyxl["vendored_provenance"]["provenance_type"])
+        self.assertEqual("cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050", openpyxl["vendored_provenance"]["sdist_sha256"])
+
+    def test_license_export_defaults_to_the_packaged_distribution_lock(self):
+        exporter = (ROOT / "tools" / "export_third_party_licenses.py").read_text(encoding="utf-8")
+        lock = json.loads((ROOT / "packaging" / "distribution_packages.lock.json").read_text(encoding="utf-8"))
+        expected = {"pywebview", "pypdfium2", "python-docx", "rapidocr", "onnxruntime", "pillow", "httpx", "keyring", "openpyxl", "matplotlib", "pyinstaller", "reportlab"}
+        self.assertTrue(expected.issubset({item["name"].lower() for item in lock["packages"]}))
+        self.assertIn("distribution_packages.lock.json", exporter)
+        self.assertIn("artifact_sha256", exporter)
 
     def test_synthetic_smoke_runs_before_gui_and_prints_only_marker(self):
         completed = subprocess.run(

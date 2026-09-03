@@ -118,17 +118,20 @@ def main(*, webview_module: Any | None = None, bridge_factory: Callable[[], Any]
 if __name__ == "__main__":
     import sys
     if "--synthetic-smoke" in sys.argv[1:]:
+        import os
         from desktop.smoke import run_synthetic_smoke
         try:
             run_synthetic_smoke()
-        except Exception:
-            raise SystemExit(1)
+        except BaseException:
+            # Never let a windowed PyInstaller bootloader surface a GUI error
+            # dialog for the non-interactive smoke mode.
+            os._exit(1)
         # A windowed PyInstaller executable has no ``sys.stdout``. File
         # descriptor 1 is nevertheless valid when the verifier redirects it.
-        import os
         try:
             os.write(1, b"PACKAGED_DESKTOP_SMOKE_OK\n")
         except OSError:
             pass
+        os._exit(0)
     else:
         main()
