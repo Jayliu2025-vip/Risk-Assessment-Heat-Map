@@ -28,6 +28,15 @@ def _finding(finding_id: str, *, matched_risk_id: str, excerpt: str) -> dict[str
     }
 
 
+def _vertical_findings() -> list[dict[str, Any]]:
+    pages = ("第 1 页", "第 2 页", "第 3 页")
+    return [{
+        **_finding(f"F-00{index}", matched_risk_id="R003", excerpt="SYNTHETIC TEST DATA"),
+        "source_page": page,
+        "title": f"Synthetic vertical finding {index}",
+    } for index, page in enumerate(pages, start=1)]
+
+
 class FakeOpenAIServer:
     """Context manager that never binds beyond loopback and never retains secrets."""
 
@@ -63,6 +72,7 @@ class FakeOpenAIServer:
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     payload = {"_invalid_request": True}
                 # Request observability is intentionally body-only: authorization is never retained.
+                payload["_remote_host"] = self.client_address[0]
                 owner.requests.append(payload)
                 if self.path != "/v1/chat/completions":
                     self.send_error(404)
@@ -107,11 +117,12 @@ class FakeOpenAIServer:
                     return
                 content = owner.content
                 if content is None:
-                    content = json.dumps({"findings": [
+                    findings = _vertical_findings() if owner.mode == "vertical" else [
                         _finding("F-001", matched_risk_id="R003", excerpt="虚构付款审批记录"),
                         _finding("F-002", matched_risk_id="", excerpt="虚构新增风险线索"),
                         _finding("F-003", matched_risk_id="R003", excerpt="虚构复核缺失记录"),
-                    ]}, ensure_ascii=False)
+                    ]
+                    content = json.dumps({"findings": findings}, ensure_ascii=False)
                 self._json(200, {"choices": [{"message": {"content": content}}]})
 
             def _json(self, status: int, body: Any, raw: bool = False) -> None:

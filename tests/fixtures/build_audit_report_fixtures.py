@@ -16,6 +16,7 @@ from reportlab.pdfgen.canvas import Canvas
 ROOT = Path(__file__).resolve().parent / "generated"
 STAMP = "SYNTHETIC TEST DATA"
 FINDING = "Synthetic audit finding: approval was bypassed."
+VERTICAL_BODY_SENTINEL = "VERTICAL-SYNTHETIC-FULL-BODY-SENTINEL-ONLY"
 TEXT_PAGES = (
     "Synthetic audit report page one documents a simulated approval control gap. "
     "The example is fabricated for extraction testing and contains no real evidence.",
@@ -76,6 +77,38 @@ def _wrapped_lines(canvas: Canvas, text: str, max_width: float) -> list[str]:
 def _scan_pdf(path: Path, raster: Path) -> None:
     canvas = Canvas(str(path), pagesize=letter, invariant=1)
     canvas.drawImage(str(raster), 42, 220, width=528, height=251)
+    canvas.save()
+
+
+def _vertical_raster(path: Path) -> None:
+    """Large, high-contrast raster text for the real local RapidOCR path."""
+    image = Image.new("RGB", (1800, 900), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((90, 80), STAMP, fill="black", font=_font(56))
+    draw.text((90, 250), "LOCATOR GAMMA", fill="black", font=_font(72))
+    draw.text((90, 410), "Fictional scanned control exception.", fill="black", font=_font(48))
+    draw.text((90, 540), "No real entity person or event.", fill="black", font=_font(42))
+    image.save(path, format="PNG", optimize=False)
+
+
+def _vertical_pdf(path: Path, raster: Path) -> None:
+    """A fixed three-page PDF: two text pages and one raster-only scan."""
+    canvas = Canvas(str(path), pagesize=letter, invariant=1)
+    pages = (
+        ("LOCATOR ALPHA", "Fictional approval exception for local test only."),
+        ("LOCATOR BETA", "Fictional review exception for local test only."),
+    )
+    for locator, sentence in pages:
+        canvas.setFont("Helvetica-Bold", 18)
+        canvas.drawString(72, 735, STAMP)
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.drawString(72, 680, locator)
+        canvas.setFont("Helvetica", 12)
+        canvas.drawString(72, 640, sentence)
+        canvas.drawString(72, 600, VERTICAL_BODY_SENTINEL)
+        canvas.showPage()
+    canvas.drawImage(str(raster), 42, 180, width=528, height=264)
+    canvas.showPage()
     canvas.save()
 
 
@@ -152,6 +185,9 @@ def build() -> Path:
     _finding_image(raster)
     _text_pdf(ROOT / "text_report.pdf")
     _scan_pdf(ROOT / "scan_report.pdf", raster)
+    vertical_raster = ROOT / "vertical_slice_scan.png"
+    _vertical_raster(vertical_raster)
+    _vertical_pdf(ROOT / "vertical_slice_report.pdf", vertical_raster)
     _docx(ROOT / "report.docx", raster, mixed=False)
     _docx(ROOT / "mixed_report.docx", raster, mixed=True)
     _inline_docx(ROOT / "inline_report.docx", raster)
