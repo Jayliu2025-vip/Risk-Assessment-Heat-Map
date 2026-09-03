@@ -6,6 +6,7 @@ import base64
 import json
 import re
 from collections.abc import Iterable, Mapping
+from itertools import islice
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -49,6 +50,17 @@ _SAFE_MESSAGES = {
 
 def _error(code: str) -> ModelError:
     return ModelError(code, _SAFE_MESSAGES[code])
+
+
+def _collect_bounded(values: Iterable[Any], limit: int) -> list[Any]:
+    """Collect at most one item beyond a cap so unbounded iterables stay bounded."""
+    try:
+        collected = list(islice(values, limit + 1))
+    except (TypeError, ValueError):
+        raise _error("MODEL_INPUT_TOO_LARGE") from None
+    if len(collected) > limit:
+        raise _error("MODEL_INPUT_TOO_LARGE")
+    return collected
 
 
 def normalize_endpoint(base_url: str) -> str:
@@ -128,8 +140,9 @@ class ModelClient:
         self._client.close()
 
     def _validate_images(self, vision_images: Iterable[str | Path]) -> list[Path]:
+        raw_paths = _collect_bounded(vision_images, MAX_VISION_IMAGES)
         try:
-            paths = [Path(item) for item in vision_images]
+            paths = [Path(item) for item in raw_paths]
         except (TypeError, ValueError):
             raise _error("MODEL_INPUT_TOO_LARGE") from None
         if len(paths) > MAX_VISION_IMAGES:
@@ -192,12 +205,7 @@ class ModelClient:
     def analyze(self, task_id: str, normalized_text: str, risk_catalog: Iterable[Mapping[str, Any]], vision_images: Iterable[str | Path]) -> list[FindingDraft]:
         if not isinstance(normalized_text, str) or not normalized_text.strip() or len(normalized_text) > MAX_INPUT_CHARS:
             raise _error("MODEL_INPUT_TOO_LARGE")
-        try:
-            risks = list(risk_catalog)
-        except TypeError:
-            raise _error("MODEL_INPUT_TOO_LARGE") from None
-        if len(risks) > MAX_RISKS:
-            raise _error("MODEL_INPUT_TOO_LARGE")
+        risks = _collect_bounded(risk_catalog, MAX_RISKS)
         prompt_risks = _as_prompt_catalog(risks)
         images = self._validate_images(vision_images)
         try:
@@ -240,7 +248,7 @@ class ModelClient:
                 if finding.finding_id in seen:
                     raise ValidationError("finding_id重复")
                 seen.add(finding.finding_id)
-                if not sent_vision and "".join(finding.source_excerpt.split()) not in normalized_evidence:
+                if "".join(finding.source_excerpt.split()) not in normalized_evidence:
                     finding.needs_review = True
                 if images and not sent_vision:
                     finding.needs_review = True

@@ -75,6 +75,17 @@ class ModelClientTests(unittest.TestCase):
                 client.analyze("T-1", "虚构付款审批记录", catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_CONNECTION_FAILED")
 
+        with FakeOpenAIServer(mode="auth") as server:
+            with ModelClient(profile(server.base_url), "k") as client:
+                with self.assertRaises(ModelError) as raised:
+                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+        self.assertEqual(raised.exception.code, "MODEL_AUTH_FAILED")
+        with FakeOpenAIServer(mode="oversized") as server:
+            with ModelClient(profile(server.base_url), "k") as client:
+                with self.assertRaises(ModelError) as raised:
+                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+        self.assertEqual(raised.exception.code, "MODEL_RESPONSE_TOO_LARGE")
+
     def test_timeout_maps_to_safe_code(self):
         with FakeOpenAIServer(mode="timeout") as server:
             with ModelClient(profile(server.base_url), "k") as client:
@@ -98,6 +109,16 @@ class ModelClientTests(unittest.TestCase):
                 text_payload = server.requests[-1]
             self.assertNotIn("base64", json.dumps(text_payload, ensure_ascii=False))
             self.assertTrue(all(item.needs_review for item in drafts))
+
+    def test_vision_grounding_still_requires_review_for_unmatched_excerpt(self):
+        payload = {"findings": [{"finding_id": "F-vision", "title": "虚构", "fact_summary": "虚构", "source_page": "1", "source_excerpt": "完全不存在的原文", "matched_risk_id": "R003", "domain": "资金活动", "likelihood": 3, "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "虚构", "needs_review": False}]}
+        with tempfile.TemporaryDirectory() as temp:
+            image = Path(temp) / "synthetic.png"
+            image.write_bytes(b"synthetic-png")
+            with FakeOpenAIServer(content=json.dumps(payload, ensure_ascii=False)) as server:
+                with ModelClient(profile(server.base_url, vision=True), "k") as client:
+                    findings = client.analyze("T-1", "虚构付款审批记录", catalog(), [image])
+        self.assertTrue(findings[0].needs_review)
 
     def test_fenced_json_is_allowed_but_prose_is_rejected(self):
         response = json.dumps({"findings": []}, ensure_ascii=False)
@@ -152,6 +173,43 @@ class ModelClientTests(unittest.TestCase):
                             with self.assertRaises(ModelError) as raised:
                                 client.analyze("T-1", text, risks, images)
                             self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
+
+    def test_risk_and_image_generators_stop_at_cap_plus_one(self):
+        def guarded(value, limit):
+            for _ in range(limit + 1):
+                yield value
+            raise AssertionError("iterable consumed beyond cap+1")
+
+        with ModelClient(profile("http://127.0.0.1:1"), "k") as client:
+            with self.assertRaises(ModelError) as raised:
+                client.analyze("T-1", "虚构付款审批记录", guarded(catalog()[0], model_client.MAX_RISKS), [])
+            self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
+            with self.assertRaises(ModelError) as raised:
+                client.analyze("T-1", "虚构付款审批记录", [], guarded("missing.png", model_client.MAX_VISION_IMAGES))
+            self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
+
+    def test_more_than_ten_images_is_rejected(self):
+        with ModelClient(profile("http://127.0.0.1:1"), "k") as client:
+            with self.assertRaises(ModelError) as raised:
+                client.analyze("T-1", "虚构付款审批记录", catalog(), ["missing.png"] * 11)
+        self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
+
+    def test_more_than_two_hundred_findings_is_rejected(self):
+        finding = {"finding_id": "F-1", "title": "虚构", "fact_summary": "虚构", "source_page": "1", "source_excerpt": "虚构付款审批记录", "matched_risk_id": "R003", "domain": "资金活动", "likelihood": 3, "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "虚构", "needs_review": False}
+        payload = json.dumps({"findings": [dict(finding, finding_id=f"F-{index}") for index in range(201)]}, ensure_ascii=False)
+        with FakeOpenAIServer(content=payload) as server:
+            with ModelClient(profile(server.base_url), "k") as client:
+                with self.assertRaises(ModelError) as raised:
+                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+        self.assertEqual(raised.exception.code, "MODEL_OUTPUT_INVALID")
+
+    def test_streamed_response_without_content_length_is_bounded(self):
+        with FakeOpenAIServer(mode="streamed_oversized") as server:
+            with patch.object(model_client, "MAX_RESPONSE_BYTES", 8):
+                with ModelClient(profile(server.base_url), "k") as client:
+                    with self.assertRaises(ModelError) as raised:
+                        client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+        self.assertEqual(raised.exception.code, "MODEL_RESPONSE_TOO_LARGE")
 
     def test_test_connection_requires_ok(self):
         with FakeOpenAIServer(content="OK") as server:

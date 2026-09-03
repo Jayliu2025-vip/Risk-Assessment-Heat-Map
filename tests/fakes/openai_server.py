@@ -66,7 +66,7 @@ class FakeOpenAIServer:
                 if self.path != "/v1/chat/completions":
                     self.send_error(404)
                     return
-                if owner.mode == "auth_failed":
+                if owner.mode in {"auth", "auth_failed"}:
                     self._json(401, {"error": {"message": "denied"}})
                     return
                 if owner.mode == "rate_limit":
@@ -74,11 +74,23 @@ class FakeOpenAIServer:
                     return
                 if owner.mode == "timeout":
                     time.sleep(0.2)
-                if owner.mode == "oversized_response":
+                if owner.mode in {"oversized", "oversized_response"}:
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(5 * 1024 * 1024 + 1))
                     self.end_headers()
+                    return
+                if owner.mode == "streamed_oversized":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    chunk = b"x" * (3 * 1024 * 1024)
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                        return
                     return
                 if owner.mode == "invalid_json":
                     self._json(200, "not-json", raw=True)
