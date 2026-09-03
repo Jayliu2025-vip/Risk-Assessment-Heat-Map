@@ -68,9 +68,37 @@ class DesktopDependencyContractTests(unittest.TestCase):
             self.assertEqual(row_version, version)
             license_name, homepage, bundled, obligation = fields
             self.assertTrue(license_name)
-            self.assertRegex(homepage, r"https?://\S+")
+            self.assertRegex(homepage, r"https://\S+")
             self.assertTrue(bundled)
             self.assertTrue(obligation)
+            self.assertNotIn(obligation.lower(), {"-", "none", "n/a"})
+
+        pypdfium2 = rows["pypdfium2"][1]
+        self.assertIn("native PDFium binaries", pypdfium2[2])
+        self.assertIn("PDFium is separately licensed under BSD-3-Clause", pypdfium2[2])
+        self.assertIn("copy the wheel's bundled PDFium license files", pypdfium2[3])
+
+        rapidocr = rows["RapidOCR"][1]
+        self.assertIn("OCR model assets", rapidocr[2])
+        self.assertIn("retain notices", rapidocr[3])
+        self.assertIn("exact model files", rapidocr[3])
+
+        onnx = rows["ONNX Runtime"][1]
+        self.assertIn("native runtime binaries", onnx[2])
+        self.assertIn("retain any notices", onnx[3])
+
+        pywebview = rows["pywebview"][1]
+        self.assertIn("Windows webview", pywebview[2])
+        self.assertIn("BSD-3-Clause", pywebview[3])
+
+        keyring = rows["keyring"][1]
+        self.assertIn("OS components", keyring[2])
+        self.assertIn("MIT", keyring[3])
+
+        pyinstaller = rows["PyInstaller"][1]
+        self.assertIn("native binary", pyinstaller[2])
+        self.assertIn("bootloader exception", pyinstaller[3])
+        self.assertIn("retain its license files", pyinstaller[3])
 
 
 if __name__ == "__main__":
