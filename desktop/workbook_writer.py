@@ -334,6 +334,37 @@ def preview_changes(source, decisions, findings) -> dict:
     return _preview(source_path, decisions, findings)[0]
 
 
+def load_current_controls(source, identities) -> list[dict]:
+    """Read only the current controls named by reviewed merge/create identities."""
+    source_path = _source_path(source)
+    if not isinstance(identities, (list, tuple)):
+        raise ValidationError("控制点载入请求必须是列表")
+    workbook = _open_checked(source_path)
+    try:
+        controls = _control_records(workbook[CONTROL_SHEET], _control_limit(workbook[CONTROL_SHEET]))
+        loaded = []
+        for item in identities:
+            if not isinstance(item, dict):
+                raise ValidationError("控制点载入标识必须是对象")
+            action, risk_id, period, finding_ids = item.get("action"), item.get("risk_id"), item.get("period"), item.get("finding_ids")
+            if action not in ("create", "merge") or not isinstance(period, str) or not period:
+                raise ValidationError("控制点载入标识无效")
+            if not isinstance(finding_ids, (list, tuple)) or not finding_ids or any(not isinstance(value, str) or not value for value in finding_ids):
+                raise ValidationError("finding_ids无效")
+            if action == "merge" and (not isinstance(risk_id, str) or not RISK_ID_RE.fullmatch(risk_id)):
+                raise ValidationError("合并风险编号无效")
+            current = [] if action == "create" else [
+                {"description": record["description"], "score": record["score"], "key": record["key"] == "是"}
+                for record in controls if record["risk_id"] == risk_id and record["period"] == period
+            ]
+            loaded.append({"finding_ids": list(finding_ids), "action": action,
+                           "risk_id": risk_id if action == "merge" else "", "period": period,
+                           "controls": current})
+        return loaded
+    finally:
+        workbook.close()
+
+
 def _write_input_rows(workbook, prepared: dict) -> None:
     risks_ws, controls_ws = workbook[RISK_SHEET], workbook[CONTROL_SHEET]
     for item in prepared["resolved"]:

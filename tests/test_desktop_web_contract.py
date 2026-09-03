@@ -58,6 +58,12 @@ class DesktopWebContractTests(unittest.TestCase):
         for stale_marker in ("assessed_risks||result.risks", "control_replacements", "excluded_findings"):
             self.assertNotIn(stale_marker, self.script)
 
+    def test_desktop_script_uses_nested_scores_controls_and_race_guards(self) -> None:
+        for marker in ("impact_scores", "load_controls", "controls_confirmed", "previewGeneration",
+                       "selectedFindingId", "startBusy", "pollGeneration"):
+            self.assertIn(marker, self.script)
+        self.assertNotIn("payload[key]=value;", self.script)
+
     def test_playwright_package_contract_is_pinned(self) -> None:
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
         self.assertTrue(package["private"])

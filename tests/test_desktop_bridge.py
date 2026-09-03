@@ -228,7 +228,7 @@ class DesktopBridgeTests(unittest.TestCase):
             self.bridge._preview_slots.release()
         selected = self.select(self.workbook, "workbook")
         decision = [self.create_decision()]
-        preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", decision)
+        preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", decision, "preview", True)
         with patch("desktop.bridge.load_dataset", return_value=({}, [{"risk_id": "R001", "name": "合成风险", "domain": "采购与外包", "description": "合成事实", "owner_dept": "审计部", "period": "2026H1", "likelihood": 3, **{dim: 2 for dim in DIMS}, "rationale": "合成依据"}], [])):
             first = self.bridge.commit_to_workbook("T-1", selected["selection_token"], "2026H1", decision, preview["commit_token"])
         self.assertTrue(first["ok"])
@@ -317,7 +317,7 @@ class DesktopBridgeTests(unittest.TestCase):
         self.seed_task()
         selected = self.select(self.workbook, "workbook")
         decision = self.create_decision()
-        preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", [decision])
+        preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", [decision], "preview", True)
         self.assertEqual(preview["commit_token"], "token-1")
         bad = self.bridge.commit_to_workbook("T-1", selected["selection_token"], "2026H1", [decision], "wrong")
         self.assertEqual(bad["code"], "PREVIEW_REQUIRED")
@@ -349,8 +349,8 @@ class DesktopBridgeTests(unittest.TestCase):
         second_book_file = self.root / "second.xlsx"; second_book_file.write_bytes(b"second synthetic workbook")
         second_book = self.select(second_book_file, "workbook")["selection_token"]
         decision = [self.create_decision()]
-        self.bridge.preview_commit("T-1", first_book, "2026H1", decision)
-        self.bridge.preview_commit("T-2", second_book, "2026H1", decision)
+        self.bridge.preview_commit("T-1", first_book, "2026H1", decision, "preview", True)
+        self.bridge.preview_commit("T-2", second_book, "2026H1", decision, "preview", True)
         cleaned = self.bridge.cleanup_task("T-1")
         self.assertTrue(cleaned["ok"])
         self.assertEqual(self.pipeline.cleaned, ["T-1"])
@@ -374,7 +374,7 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual({item["finding_id"] for item in split["findings"]}, {"F-1", "F-1-A", "F-1-B"})
         selected = self.select(self.workbook, "workbook")
         decision = [self.create_decision("F-1-A")]
-        preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", decision)
+        preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", decision, "preview", True)
         self.assertEqual(set(preview) - {"ok"}, {"commit_token", "new_risks", "updated_risks", "new_controls", "excluded_count", "warnings"})
         risk = {"risk_id": "R001", "name": "合成风险", "domain": "采购与外包", "description": "合成事实", "owner_dept": "审计部", "period": "2026H1", "likelihood": 3, **{dim: 2 for dim in DIMS}, "rationale": "合成依据"}
         with patch("desktop.bridge.load_dataset", return_value=({}, [risk], [])):
@@ -387,6 +387,38 @@ class DesktopBridgeTests(unittest.TestCase):
         wrong_period = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", [self.create_decision(period="2026H2")])
         self.assertFalse(wrong_period["ok"])
         self.assertEqual(self.writer.preview_calls, [])
+
+    def test_preview_loads_current_controls_before_confirmed_final_preview(self):
+        self.seed_task()
+        selected = self.select(self.workbook, "workbook")
+        identities = [{"finding_ids": ["F-1"], "action": "merge", "risk_id": "R001", "period": "2026H1"}]
+        current = [{"description": "保留的合成控制", "score": 4, "key": True}]
+        with patch("desktop.bridge.load_current_controls", return_value=[{**identities[0], "controls": current}]) as loaded:
+            stage = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", identities, "load_controls")
+        self.assertEqual(stage, {"ok": True, "controls_by_decision": [{**identities[0], "controls": current}]})
+        loaded.assert_called_once()
+        denied = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", [self.create_decision()], "preview", False)
+        self.assertFalse(denied["ok"])
+        final = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", [self.create_decision()], "preview", True)
+        self.assertTrue(final["ok"])
+        self.assertEqual(final["commit_token"], "token-1")
+
+    def test_real_save_accept_merge_and_split_use_nested_impact_scores_only(self):
+        self.seed_task()
+        self.store.save_findings([finding("T-1", "F-2")])
+        payload = asdict(finding("ignored", "ignored", review_status="已接受"))
+        self.assertIn("impact_scores", payload)
+        self.assertFalse(any(dim in payload for dim in DIMS))
+        saved = self.bridge.save_finding("T-1", "F-1", payload)
+        self.assertEqual(saved["finding"]["review_status"], "已接受")
+        merged = self.bridge.merge_findings("T-1", ["F-1", "F-2"], payload)
+        self.assertEqual({item["finding_id"] for item in merged["findings"]}, {"F-1", "F-2"})
+        split = self.bridge.split_finding("T-1", "F-1", [asdict(finding("ignored", "F-1-A")), asdict(finding("ignored", "F-1-B"))])
+        self.assertEqual({item["finding_id"] for item in split["findings"]}, {"F-1", "F-1-A", "F-1-B"})
+        extra = {**payload, "imp_financial": 2}
+        rejected = self.bridge.save_finding("T-1", "F-1-A", extra)
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["code"], "VALIDATION_ERROR")
 
 
 class AppBootstrapTests(unittest.TestCase):

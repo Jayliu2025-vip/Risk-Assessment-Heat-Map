@@ -17,7 +17,8 @@ from urllib.parse import urlparse
 from .extraction import ExtractionError, MAX_PDF_PAGES, MAX_RENDER_PIXELS, MAX_SOURCE_BYTES, PDF_RENDER_SCALE
 from .model_client import ModelError
 from .models import ConfirmedControl, FindingDraft, ModelProfile, RiskDecision, ValidationError
-from tools.common import load_dataset
+from tools.common import DIMS, load_dataset
+from .workbook_writer import load_current_controls
 
 
 _PAGE = re.compile(r"^第 ([1-9][0-9]*) 页$")
@@ -186,6 +187,41 @@ class DesktopBridge:
             raise ValidationError("提交决策必须且只能对应当前评估期间")
         return period
 
+    @staticmethod
+    def _control_identities(period: Any, identities: Any) -> list[dict[str, Any]]:
+        if not isinstance(period, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", period) is None:
+            raise ValidationError("评估期间格式无效")
+        if not isinstance(identities, (list, tuple)):
+            raise ValidationError("控制点载入请求必须是列表")
+        result = []
+        for item in identities:
+            if not isinstance(item, Mapping):
+                raise ValidationError("控制点载入标识必须是对象")
+            action, risk_id, item_period, finding_ids = item.get("action"), item.get("risk_id"), item.get("period"), item.get("finding_ids")
+            if action not in ("create", "merge") or item_period != period:
+                raise ValidationError("控制点载入标识期间无效")
+            if not isinstance(finding_ids, (list, tuple)) or not finding_ids or any(not isinstance(value, str) or not value.strip() for value in finding_ids):
+                raise ValidationError("finding_ids无效")
+            if action == "merge" and (not isinstance(risk_id, str) or not re.fullmatch(r"R\d{3}", risk_id)):
+                raise ValidationError("合并风险编号无效")
+            result.append({"finding_ids": [value.strip() for value in finding_ids], "action": action,
+                           "risk_id": risk_id if action == "merge" else "", "period": period})
+        return result
+
+    @staticmethod
+    def _finding_payload(payload: Any) -> dict[str, Any]:
+        if not isinstance(payload, Mapping):
+            raise ValidationError("finding必须是对象")
+        allowed = {"task_id", "finding_id", "title", "fact_summary", "source_page", "source_excerpt",
+                   "matched_risk_id", "domain", "likelihood", "impact_scores", "rationale",
+                   "needs_review", "review_status"}
+        if set(payload) - allowed or any(dimension in payload for dimension in DIMS):
+            raise ValidationError("finding字段无效")
+        scores = payload.get("impact_scores")
+        if not isinstance(scores, Mapping) or set(scores) != set(DIMS):
+            raise ValidationError("impact_scores必须包含全部影响维度")
+        return dict(payload)
+
     def _render_pdf_page(self, path: Path, page_number: int) -> bytes:
         import pypdfium2
         document = page = bitmap = image = None
@@ -345,9 +381,8 @@ class DesktopBridge:
     @_public
     def save_finding(self, task_id: Any, finding_id: Any, payload: Any) -> dict[str, Any]:
         with self._task_lock(task_id):
-            if not isinstance(payload, Mapping): raise ValidationError("finding必须是对象")
             self._get_finding(task_id, finding_id)
-            edited = dict(payload); edited["task_id"], edited["finding_id"] = task_id, finding_id
+            edited = self._finding_payload(payload); edited["task_id"], edited["finding_id"] = task_id, finding_id
             saved = self._pipeline.review_findings(task_id, [FindingDraft(**edited)])[0]
         return {"finding": asdict(saved)}
 
@@ -359,10 +394,9 @@ class DesktopBridge:
     def _merge_findings(self, task_id: Any, finding_ids: Any, payload: Any) -> dict[str, Any]:
         if not isinstance(finding_ids, (list, tuple)) or len(finding_ids) < 2 or len(set(finding_ids)) != len(finding_ids):
             raise ValidationError("至少选择两个不重复发现")
-        if not isinstance(payload, Mapping): raise ValidationError("finding必须是对象")
         existing = {item.finding_id: item for item in self._store.list_findings(task_id)}
         if any(item not in existing for item in finding_ids): raise _BridgeError("NOT_FOUND", "请求的发现不存在")
-        merged = dict(payload); merged["task_id"], merged["finding_id"] = task_id, finding_ids[0]
+        merged = self._finding_payload(payload); merged["task_id"], merged["finding_id"] = task_id, finding_ids[0]
         checked = [FindingDraft(**merged)]
         for finding_id in finding_ids[1:]:
             excluded = asdict(existing[finding_id]); excluded["review_status"] = "已排除"; checked.append(FindingDraft(**excluded))
@@ -380,8 +414,7 @@ class DesktopBridge:
             raise ValidationError("至少需要两个拆分发现")
         additions = []
         for payload in payloads:
-            if not isinstance(payload, Mapping): raise ValidationError("finding必须是对象")
-            item = dict(payload); item["task_id"] = task_id; item["review_status"] = "待确认"
+            item = self._finding_payload(payload); item["task_id"] = task_id; item["review_status"] = "待确认"
             additions.append(FindingDraft(**item))
         ids = [item.finding_id for item in additions]
         if len(ids) != len(set(ids)) or finding_id in ids:
@@ -391,9 +424,15 @@ class DesktopBridge:
         return {"findings": [asdict(item) for item in saved]}
 
     @_public
-    def preview_commit(self, task_id: Any, workbook_selection_token: Any, period: Any, decisions: Any) -> dict[str, Any]:
+    def preview_commit(self, task_id: Any, workbook_selection_token: Any, period: Any, decisions: Any,
+                       stage: Any = "preview", controls_confirmed: Any = False) -> dict[str, Any]:
         with self._task_lock(task_id):
             source = self._selection(workbook_selection_token, "workbook")
+            if stage == "load_controls":
+                identities = self._control_identities(period, decisions)
+                return {"controls_by_decision": load_current_controls(source, identities)}
+            if stage != "preview" or controls_confirmed is not True:
+                raise ValidationError("必须确认已显示的当前控制点后才能生成预览")
             checked = self._decisions(decisions)
             checked_period = self._decision_period(period, checked)
             findings = tuple(self._store.list_findings(task_id))

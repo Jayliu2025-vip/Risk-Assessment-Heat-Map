@@ -161,6 +161,7 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
     <section id="report-step-commit" hidden>
       <h3>进入风险评估</h3>
       <p class="note">请先确认当前控制措施；确认前不会展示当前剩余风险或提交入口。</p>
+      <div id="report-current-controls" aria-live="polite"></div>
       <label class="report-confirm"><input id="report-controls-confirmed" type="checkbox"> 已确认当前控制措施</label>
       <div class="toolbar"><button class="btn primary" id="report-preview" type="button">选择工作簿并预览</button></div>
       <div id="report-change-preview" class="report-preview" hidden><h3>变更预览</h3><ul id="report-preview-list"></ul><button class="btn primary" id="report-commit" type="button">提交到工作簿</button></div>
