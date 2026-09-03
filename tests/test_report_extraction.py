@@ -14,6 +14,7 @@ import desktop.extraction as extraction
 from desktop.extraction import ExtractionError, extract_report, text_is_usable
 from desktop.ocr import OcrError, RapidOcrEngine
 from reportlab.pdfgen.canvas import Canvas
+from docx import Document
 from tests.fixtures.build_audit_report_fixtures import TEXT_PAGES, _wrapped_lines, build
 
 
@@ -216,6 +217,19 @@ class ReportExtractionTests(unittest.TestCase):
             lines = _wrapped_lines(canvas, page, 468)
             self.assertEqual(" ".join(lines), page)
             self.assertTrue(all(canvas.stringWidth(line, "Helvetica", 12) <= 468 for line in lines))
+
+    def test_table_cell_paragraphs_keep_a_single_newline_boundary(self):
+        source = self.temp / "synthetic_multi_paragraph_table.docx"
+        document = Document()
+        document.add_heading("虚构测试资料 / SYNTHETIC TEST DATA", level=1)
+        cell = document.add_table(rows=1, cols=1).cell(0, 0)
+        cell.text = "FIRST"
+        cell.add_paragraph("SECOND")
+        document.save(source)
+        result = extract_report(source, self.temp, FakeOcr())
+        text = "".join(block.text for block in result.blocks if block.locator == "Word 表格 1")
+        self.assertIn("FIRST\nSECOND", text)
+        self.assertNotIn("FIRSTSECOND", text)
 
 
 if __name__ == "__main__":

@@ -279,11 +279,20 @@ def _table_events(table: Table, temp_root: Path, image_sequence: list[int]) -> l
         cells = row.tc_lst
         for cell_index, cell_xml in enumerate(cells):
             cell = _Cell(cell_xml, table)
+            child_groups: list[list[str | Path]] = []
             for child in cell._tc.iterchildren():
                 if child.tag.endswith("}p"):
-                    events.extend(_paragraph_events(Paragraph(child, cell), temp_root, image_sequence))
+                    group = _paragraph_events(Paragraph(child, cell), temp_root, image_sequence)
                 elif child.tag.endswith("}tbl"):
-                    events.extend(_table_events(Table(child, cell), temp_root, image_sequence))
+                    group = _table_events(Table(child, cell), temp_root, image_sequence)
+                else:
+                    continue
+                if group:
+                    child_groups.append(group)
+            for group_index, group in enumerate(child_groups):
+                if group_index:
+                    events.append("\n")
+                events.extend(group)
             if cell_index < len(cells) - 1:
                 events.append("\t")
         if row_index < len(rows) - 1:
