@@ -11,6 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import DIMS, DEFAULT_CONFIG, CONTROL_FIELDS, RISK_FIELDS
+from scoring_anchors import load_scoring_anchors
 
 P1, P2 = "2025H2", "2026H1"
 
@@ -229,7 +230,11 @@ def dump_all():
         f.write("window.SAMPLE_DATA = ")
         f.write(json.dumps(payload, ensure_ascii=False))
         f.write(";\n")
-    print(f"risks={len(risks)} controls={len(controls)} -> data/export/*, web/sample_data.js")
+    with open(os.path.join(web_dir, "scoring_anchors.js"), "w", encoding="utf-8") as f:
+        f.write("window.SCORING_ANCHORS = ")
+        f.write(json.dumps(load_scoring_anchors(), ensure_ascii=False, indent=2))
+        f.write(";\n")
+    print(f"risks={len(risks)} controls={len(controls)} -> data/export/*, web/sample_data.js, web/scoring_anchors.js")
 
 
 if __name__ == "__main__":
