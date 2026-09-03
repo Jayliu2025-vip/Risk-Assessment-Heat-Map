@@ -38,10 +38,13 @@ hash and copied notice hashes for every locked distribution.
 
 The same lock also covers non-distribution runtime material actually shipped by
 the onedir build: CPython 3.13.14, the PyInstaller 6.22.2 Windows bootloader,
-Microsoft WebView2 SDK 1.0.3856.49, and the exact Microsoft Visual C++ runtime
-files selected from Windows System32. WebView2 SDK license and NOTICE text are taken
-from its exact official NuGet package; Visual C++ runtime redistribution terms are
-retained from Shapely's bundled `LICENSE_win32`. Where an installed wheel omitted license
+Microsoft WebView2 SDK 1.0.3856.49, and the Microsoft Visual C++ Redistributable
+14.50.35719.0 prerequisite. WebView2 SDK license and NOTICE text are taken from
+its exact official NuGet package. The Visual C++ prerequisite is the signed,
+versioned Microsoft `VC_redist.x64.exe`; its official Visual Studio 2026 V14
+Redistributable EULA and Microsoft redistribution reference are pinned in the
+lock. Machine-local System32 runtime DLLs are excluded from the onedir payload.
+Where an installed wheel omitted license
 text, the lock records the exact PyPI sdist URL, filename, archive hash and
 license hash. ANTLR and FlatBuffers did not publish a usable license-bearing PyPI
 sdist for these versions, so their exact official version tags are recorded.

@@ -530,6 +530,9 @@
       "version": "6.22.2",
       "kind": "bootloader",
       "artifact_locator": "PyInstaller/bootloader/Windows-64bit-intel/runw.exe",
+      "collect_native_names": [
+        "RiskAssessmentHeatMap.exe"
+      ],
       "license_distribution": "PyInstaller"
     },
     {
@@ -564,19 +567,27 @@
       }
     },
     {
-      "name": "Microsoft Visual C++ Runtime",
+      "name": "Microsoft Visual C++ Redistributable",
       "version": "14.50.35719.0",
-      "kind": "native-runtime",
-      "artifact_source": "system32",
-      "ambient_native_names": [
-        "msvcp140.dll",
-        "MSVCP140_1.dll"
-      ],
-      "artifact_sha256": {
-        "msvcp140.dll": "def46aa6a8f72f27bafac0c43334419486a4d1dcdb6c479a8ef7034b3e1fa4cb",
-        "MSVCP140_1.dll": "2dd670f874562fbdca5b022df1943d70a57ba91fde559280e3a1daebe4db2380"
-      },
-      "license_distribution": "shapely"
+      "file_version": "14.50.35719.0",
+      "kind": "prerequisite",
+      "artifact_source": "packaging-cache",
+      "artifact_locator": "VC_redist.x64-14.50.35719.exe",
+      "artifact_sha256": "8995548dfffcde7c49987029c764355612ba6850ee09a7b6f0fddc85bdc5c280",
+      "vendored_provenance": {
+        "provenance_type": "microsoft_signed_redistributable",
+        "source_url": "https://download.visualstudio.microsoft.com/download/pr/6f02464a-5e9b-486d-a506-c99a17db9a83/8995548DFFFCDE7C49987029C764355612BA6850EE09A7B6F0FDDC85BDC5C280/VC_redist.x64.exe",
+        "official_redirect_url": "https://aka.ms/vs/18/release/14.50.35719/VC_redist.x64.exe",
+        "source_filename": "VC_redist.x64-14.50.35719.exe",
+        "source_sha256": "8995548dfffcde7c49987029c764355612ba6850ee09a7b6f0fddc85bdc5c280",
+        "license_path": "licenses/Microsoft.VCRedist-14.50.35719.0/LICENSE.txt",
+        "license_sha256": "54300741255267c6ad7af36673145563099941a3c37df5b23c062571b94f2f09",
+        "license_source_url": "https://visualstudio.microsoft.com/wp-content/uploads/2025/10/Visual-C-V14-License-Redistributable_and_Runtime_ENU.docx",
+        "license_source_filename": "Visual-C-V14-License-Redistributable_and_Runtime_ENU.docx",
+        "license_source_sha256": "08651651a7602fc7c0e2763de0fde1ff9f868df2780597cd1775ee9d6441c783",
+        "license_extraction": "plain text in document order",
+        "redistribution_reference": "https://learn.microsoft.com/en-us/visualstudio/releases/2026/redistribution"
+      }
     }
   ]
 }

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$PythonExe,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$Offline
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +27,10 @@ $BuildPath = Assert-AllowedBuildPath (Join-Path $RepoRoot 'build\risk_heatmap_de
 $DistPath = Assert-AllowedBuildPath (Join-Path $RepoRoot 'dist\RiskAssessmentHeatMap')
 $InstallerPath = Assert-AllowedBuildPath (Join-Path $RepoRoot 'installer-output')
 $LicensePath = Assert-AllowedBuildPath (Join-Path $RepoRoot 'build\licenses')
+$VCRedistCachePath = Join-Path $RepoRoot 'packaging\cache\VC_redist.x64-14.50.35719.exe'
+$VCRedistDownloadUrl = 'https://download.visualstudio.microsoft.com/download/pr/6f02464a-5e9b-486d-a506-c99a17db9a83/8995548DFFFCDE7C49987029C764355612BA6850EE09A7B6F0FDDC85BDC5C280/VC_redist.x64.exe'
+$VCRedistSha256 = '8995548dfffcde7c49987029c764355612ba6850ee09a7b6f0fddc85bdc5c280'
+$VCRedistFileVersion = '14.50.35719.0'
 foreach ($path in @($BuildPath, $DistPath, $InstallerPath, $LicensePath)) {
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
 }
@@ -46,6 +51,28 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
+if (-not (Test-Path -LiteralPath $VCRedistCachePath -PathType Leaf)) {
+    if ($Offline) { Write-Error "VC_REDIST_CACHE_MISSING $VCRedistCachePath"; exit 2 }
+    $cacheDirectory = Split-Path -Parent $VCRedistCachePath
+    New-Item -ItemType Directory -Path $cacheDirectory -Force | Out-Null
+    $downloadPath = "$VCRedistCachePath.download"
+    try {
+        Invoke-WebRequest -Uri $VCRedistDownloadUrl -OutFile $downloadPath -UseBasicParsing
+        Move-Item -LiteralPath $downloadPath -Destination $VCRedistCachePath -Force
+    } finally {
+        if (Test-Path -LiteralPath $downloadPath -PathType Leaf) { Remove-Item -LiteralPath $downloadPath -Force }
+    }
+}
+$actualRedistHash = (Get-FileHash -LiteralPath $VCRedistCachePath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualRedistHash -ne $VCRedistSha256) { Write-Error 'VC_REDIST_HASH_MISMATCH'; exit 2 }
+$redistVersion = (Get-Item -LiteralPath $VCRedistCachePath).VersionInfo.FileVersion
+if ($redistVersion -ne $VCRedistFileVersion) { Write-Error "VC_REDIST_VERSION_MISMATCH expected=$VCRedistFileVersion actual=$redistVersion"; exit 2 }
+$redistSignature = Get-AuthenticodeSignature -LiteralPath $VCRedistCachePath
+if ($redistSignature.Status -ne 'Valid' -or $redistSignature.SignerCertificate.Subject -notmatch 'CN=Microsoft Corporation') {
+    Write-Error 'VC_REDIST_SIGNATURE_INVALID'
+    exit 2
+}
+
 & $PythonExe (Join-Path $RepoRoot 'tools\export_third_party_licenses.py') --output $LicensePath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $PythonBase = (& $PythonExe -c "import sys; print(sys.base_prefix)").Trim()
@@ -63,7 +90,7 @@ try {
     $PyInstallerExitCode = $LASTEXITCODE
 } finally { $env:PATH = $OriginalPath }
 if ($PyInstallerExitCode -ne 0) { exit $PyInstallerExitCode }
-& $PythonExe (Join-Path $RepoRoot 'tools\export_third_party_licenses.py') --audit-analysis (Join-Path $BuildPath 'risk_heatmap_desktop\Analysis-00.toc') --dist-root $DistPath
+& $PythonExe (Join-Path $RepoRoot 'tools\export_third_party_licenses.py') --audit-analysis (Join-Path $BuildPath 'risk_heatmap_desktop\Analysis-00.toc') --audit-collect (Join-Path $BuildPath 'risk_heatmap_desktop\COLLECT-00.toc') --dist-root $DistPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $OnedirExe = Join-Path $DistPath 'RiskAssessmentHeatMap.exe'

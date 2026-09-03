@@ -69,6 +69,27 @@ class PackagingContractTests(unittest.TestCase):
         self.assertIn("not WizardSilent", script)
         self.assertIn("Log(", script)
 
+    def test_inno_installs_verified_vc_redist_as_separately_elevated_prerequisite(self):
+        script = (ROOT / "packaging" / "RiskAssessmentHeatMap.iss").read_text(encoding="utf-8")
+        for required in (
+            "VC_redist.x64-14.50.35719.exe",
+            "Flags: dontcopy",
+            "SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64",
+            "RegQueryDWordValue(HKLM64",
+            "ShellExec('runas'",
+            "/install /quiet /norestart",
+            "PrepareToInstall",
+            "3010",
+        ):
+            self.assertIn(required, script)
+        self.assertIn("PrivilegesRequired=lowest", script)
+
+    def test_spec_excludes_system32_vc_runtime_dlls_from_onedir(self):
+        spec = (ROOT / "packaging" / "risk_heatmap_desktop.spec").read_text(encoding="utf-8")
+        self.assertIn('"msvcp140.dll"', spec)
+        self.assertIn('"msvcp140_1.dll"', spec)
+        self.assertIn("a.binaries =", spec)
+
     def test_verifier_bounds_installer_and_uninstaller_and_captures_logs(self):
         script = (ROOT / "tools" / "verify_desktop_package.ps1").read_text(encoding="utf-8")
         self.assertNotIn("& $InstallerPath", script)

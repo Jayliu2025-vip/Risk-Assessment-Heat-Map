@@ -92,9 +92,19 @@ class PackagingLicenseClosureTests(unittest.TestCase):
         self.assertEqual(5, len(webview))
         self.assertIn("webview/lib/runtimes/win-x64/native/WebView2Loader.dll", webview)
         self.assertEqual(
-            ["msvcp140.dll", "MSVCP140_1.dll"],
-            components["Microsoft Visual C++ Runtime"]["ambient_native_names"],
+            ["RiskAssessmentHeatMap.exe"],
+            components["PyInstaller bootloader"]["collect_native_names"],
         )
+        redist = components["Microsoft Visual C++ Redistributable"]
+        self.assertEqual("prerequisite", redist["kind"])
+        self.assertEqual("VC_redist.x64-14.50.35719.exe", redist["artifact_locator"])
+        self.assertEqual(
+            "8995548dfffcde7c49987029c764355612ba6850ee09a7b6f0fddc85bdc5c280",
+            redist["artifact_sha256"],
+        )
+        self.assertEqual("14.50.35719.0", redist["file_version"])
+        self.assertNotIn("ambient_native_names", redist)
+        self.assertNotIn("license_distribution", redist)
 
     def test_every_wheel_without_notice_has_frozen_vendored_provenance(self):
         missing_wheel_notices = {
@@ -133,9 +143,17 @@ class PackagingLicenseClosureTests(unittest.TestCase):
                 "CPython",
                 "PyInstaller bootloader",
                 "Microsoft WebView2 SDK",
-                "Microsoft Visual C++ Runtime",
+                "Microsoft Visual C++ Redistributable",
             },
             component_names,
+        )
+        redist = next(
+            item for item in manifest["components"]
+            if item["name"] == "Microsoft Visual C++ Redistributable"
+        )
+        self.assertEqual(
+            "8995548dfffcde7c49987029c764355612ba6850ee09a7b6f0fddc85bdc5c280",
+            redist["artifact_sha256"],
         )
         for record in [*manifest["packages"], *manifest["components"]]:
             self.assertRegex(record["artifact_sha256"], r"^[0-9a-f]{64}$")
@@ -204,10 +222,21 @@ class PackagingLicenseClosureTests(unittest.TestCase):
         audit = script.index("--audit-analysis")
         self.assertGreater(audit, pyinstaller)
         self.assertIn("risk_heatmap_desktop\\Analysis-00.toc", script)
+        self.assertIn("--audit-collect", script)
+        self.assertIn("risk_heatmap_desktop\\COLLECT-00.toc", script)
         self.assertIn("$OriginalPath", script)
         self.assertIn("$env:PATH =", script)
         self.assertIn("finally { $env:PATH = $OriginalPath }", script)
         self.assertIn("platform.python_version() == '3.13.14'", script)
+        self.assertIn("[switch]$Offline", script)
+        self.assertIn("packaging\\cache\\VC_redist.x64-14.50.35719.exe", script)
+        self.assertIn("8995548dfffcde7c49987029c764355612ba6850ee09a7b6f0fddc85bdc5c280", script.lower())
+        self.assertIn("14.50.35719.0", script)
+        self.assertIn("Get-AuthenticodeSignature", script)
+        self.assertIn("VC_REDIST_CACHE_MISSING", script)
+        self.assertIn("VC_REDIST_HASH_MISMATCH", script)
+        self.assertIn("VC_REDIST_SIGNATURE_INVALID", script)
+        self.assertIn("packaging/cache/", (ROOT / ".gitignore").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

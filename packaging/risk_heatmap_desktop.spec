@@ -48,6 +48,13 @@ a = Analysis(
     excludes=excludes,
     noarchive=False,
 )
+# The Microsoft VC++ runtime is centrally deployed by the signed prerequisite
+# in the Inno installer. Never copy machine-local System32 DLLs into onedir.
+vc_runtime_prerequisite_dlls = {"msvcp140.dll", "msvcp140_1.dll"}
+a.binaries = [
+    item for item in a.binaries
+    if Path(item[0]).name.lower() not in vc_runtime_prerequisite_dlls
+]
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="RiskAssessmentHeatMap", console=False)
 coll = COLLECT(exe, a.binaries, a.datas, name="RiskAssessmentHeatMap")

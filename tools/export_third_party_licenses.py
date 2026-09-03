@@ -12,7 +12,6 @@ import ast
 import hashlib
 from importlib import metadata
 import json
-import os
 from pathlib import Path
 import re
 import shutil
@@ -252,16 +251,16 @@ def _copy_component(component: dict[str, object], output: Path) -> dict[str, obj
         )
         repo_root = Path(__file__).resolve().parents[1]
         source_ids = {path: "vendor:" + path.relative_to(repo_root).as_posix() for path in files}
-    elif component.get("artifact_source") == "system32":
-        system_root = Path(os.environ["SystemRoot"])
-        artifacts = [system_root / "System32" / locator for locator in locators]
-        expected_hashes = component.get("artifact_sha256", {})
+    elif component.get("artifact_source") == "packaging-cache":
+        repo_root = Path(__file__).resolve().parents[1]
+        artifacts = [repo_root / "packaging" / "cache" / locator for locator in locators]
         for locator, artifact in zip(locators, artifacts, strict=True):
-            if expected_hashes.get(locator.as_posix()) != _sha256(artifact):
+            if not artifact.is_file() or component.get("artifact_sha256") != _sha256(artifact):
                 raise LicenseMaterialUnavailable(f"BLOCKED package={name} file={locator.as_posix()} hash-mismatch")
-        distribution = metadata.distribution(str(component["license_distribution"]))
-        files = _license_files(distribution)
-        source_ids = {path: _source_identifier(path, distribution) for path in files}
+        files, provenance = _verified_locked_vendor(
+            {"name": name, "vendored_provenance": component["vendored_provenance"]}
+        )
+        source_ids = {path: "vendor:" + path.relative_to(repo_root).as_posix() for path in files}
     else:
         raise LicenseMaterialUnavailable(f"BLOCKED package={name} file=unknown-component")
     for locator, artifact in zip(locators, artifacts, strict=True):
@@ -288,11 +287,12 @@ def _copy_component(component: dict[str, object], output: Path) -> dict[str, obj
         file_hash = _sha256(artifact)
         artifact_digest.update(locator.as_posix().encode("utf-8") + b"\0" + bytes.fromhex(file_hash))
         artifact_files.append({"path": locator.as_posix(), "sha256": file_hash})
+    artifact_hash = artifact_files[0]["sha256"] if len(artifact_files) == 1 else artifact_digest.hexdigest()
     record: dict[str, object] = {
         "name": name,
         "version": component["version"],
         "kind": component["kind"],
-        "artifact_sha256": artifact_digest.hexdigest(),
+        "artifact_sha256": artifact_hash,
         "artifacts": artifact_files,
         "files": manifest_files,
     }
@@ -369,6 +369,7 @@ def audit_analysis_toc(
     toc_path: Path,
     lock: dict[str, object] | None = None,
     dist_root: Path | None = None,
+    collect_toc_path: Path | None = None,
 ) -> dict[str, object]:
     """Block a build when its PyInstaller inputs expose an unlocked distribution."""
     lock = _load_lock() if lock is None else lock
@@ -376,15 +377,20 @@ def audit_analysis_toc(
         payload = ast.literal_eval(toc_path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, ValueError) as exc:
         raise LicenseMaterialUnavailable(f"BLOCKED package=pyinstaller-analysis file={toc_path.name}") from exc
+    native_payload = payload
+    if collect_toc_path is not None:
+        try:
+            native_payload = ast.literal_eval(collect_toc_path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, ValueError) as exc:
+            raise LicenseMaterialUnavailable(f"BLOCKED package=pyinstaller-collect file={collect_toc_path.name}") from exc
     owners = _installed_file_owners()
     detected: set[str] = set()
     ambient_native: set[str] = set()
     python_base = Path(sys.base_prefix).resolve()
-    system32 = (Path(os.environ["SystemRoot"]) / "System32").resolve()
-    allowed_ambient = {
-        name.lower()
+    declared_component_binaries = {
+        value.lower()
         for component in lock.get("components", [])
-        for name in component.get("ambient_native_names", [])
+        for value in component.get("collect_native_names", [])
     }
     for value in _walk_strings(payload):
         candidate = Path(value)
@@ -396,11 +402,20 @@ def audit_analysis_toc(
             continue
         file_owners = owners.get(resolved, ())
         detected.update(file_owners)
+    for value in _walk_strings(native_payload):
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            continue
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        file_owners = owners.get(resolved, ())
         if (
             resolved.suffix.lower() in {".dll", ".exe", ".pyd", ".so", ".dylib"}
             and not file_owners
             and not resolved.is_relative_to(python_base)
-            and not (resolved.parent == system32 and resolved.name.lower() in allowed_ambient)
+            and resolved.name.lower() not in declared_component_binaries
         ):
             ambient_native.add(resolved.name)
     locked = {canonicalize_name(item["name"]): item for item in lock["packages"]}
@@ -455,11 +470,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--packages", nargs="+")
     parser.add_argument("--allow-noncritical", action="store_true")
     parser.add_argument("--audit-analysis", type=Path)
+    parser.add_argument("--audit-collect", type=Path)
     parser.add_argument("--dist-root", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.audit_analysis:
-            result = audit_analysis_toc(args.audit_analysis, dist_root=args.dist_root)
+            result = audit_analysis_toc(
+                args.audit_analysis,
+                dist_root=args.dist_root,
+                collect_toc_path=args.audit_collect,
+            )
             print(
                 "PACKAGED_DISTRIBUTION_AUDIT_OK "
                 f"detected={len(result['detected_distributions'])} locked={result['locked_distributions']}"
