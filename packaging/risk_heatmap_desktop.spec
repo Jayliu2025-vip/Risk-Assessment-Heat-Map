@@ -31,7 +31,6 @@ hiddenimports = [
     "webview.platforms.edgechromium",
     "webview.platforms.winforms",
     "keyring.backends.Windows",
-    "keyring.backends.Windows.WinVaultKeyring",
 ] + collect_submodules("rapidocr") + collect_submodules("keyring.backends")
 
 excludes = [

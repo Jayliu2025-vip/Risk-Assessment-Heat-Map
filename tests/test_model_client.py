@@ -14,6 +14,7 @@ import httpx
 import desktop.model_client as model_client
 from desktop.model_client import ModelClient, ModelError, normalize_endpoint, serialize_evidence_blocks
 from desktop.models import ExtractedBlock, ModelProfile
+from desktop.prompts import build_analysis_messages
 from tests.fakes.openai_server import FakeOpenAIServer
 from tools.common import DIMS
 
@@ -31,6 +32,18 @@ def evidence(*blocks: tuple[str, str]) -> str:
 
 
 class ModelClientTests(unittest.TestCase):
+    def test_prompt_requires_units_amounts_and_dimension_specific_evidence(self) -> None:
+        system = build_analysis_messages(
+            evidence(("第 1 页", "虚构甲单位涉及金额 100 万元")),
+            catalog(),
+        )[0]["content"]
+        self.assertIn("涉及单位", system)
+        self.assertIn("金额", system)
+        self.assertIn("fact_summary", system)
+        self.assertIn("每个非空评分维度", system)
+        self.assertIn("rationale", system)
+        self.assertIn("没有独立证据", system)
+
     def test_success_sends_safe_rubric_and_returns_pending_drafts(self):
         with FakeOpenAIServer() as server:
             with ModelClient(profile(server.base_url), "secret-key") as client:

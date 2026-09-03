@@ -40,6 +40,8 @@ def build_analysis_messages(normalized_text: str, risk_catalog: Iterable[Mapping
         "证据缺失时必须填 null，不得编造。",
         "source_page 必须逐字使用输入文本块的 locator（不含方括号），不得跨块引用。",
         "只提取历史发现事实；不要把历史发现事实等同于当前控制有效性，也不得推断当前控制有效性。",
+        "fact_summary 必须保留原文明确出现的涉及单位、金额和币种；原文没有时不得补写。",
+        "rationale 必须分别说明可能性以及每个非空评分维度的独立证据，并保留对应原文事实；某维度没有独立证据时，该维度必须为 null。",
         "不得计算最终影响、固有风险、剩余风险或等级。",
         "评分仅可参考以下由 load_scoring_anchors() 加载的 9 组规范锚点：",
         json.dumps(anchors, ensure_ascii=False, separators=(",", ":")),

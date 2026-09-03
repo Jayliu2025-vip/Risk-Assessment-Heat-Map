@@ -42,6 +42,7 @@ class PackagingContractTests(unittest.TestCase):
             "COLLECT",
         ):
             self.assertIn(required, spec)
+        self.assertNotIn("keyring.backends.Windows.WinVaultKeyring", spec)
         self.assertIn("exclude_binaries=True", spec)
 
     def test_inno_script_is_per_user_and_installs_complete_onedir(self):
