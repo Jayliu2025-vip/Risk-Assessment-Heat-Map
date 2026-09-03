@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.worktrees/
 
 # 编辑器 / 工具
 .opencode/
