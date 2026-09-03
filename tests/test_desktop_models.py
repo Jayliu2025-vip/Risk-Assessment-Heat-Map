@@ -1,5 +1,5 @@
 import unittest
-from dataclasses import fields
+from dataclasses import MISSING, fields
 
 from desktop.models import (
     AnalysisTask,
@@ -44,6 +44,20 @@ class DesktopModelsTests(unittest.TestCase):
             payload[key] = value
             with self.assertRaises(ValidationError):
                 FindingDraft.from_model("T001", payload, {"R001"})
+
+    def test_finding_allows_blank_matched_risk_for_new_risk(self):
+        payload = self.valid_payload()
+        payload["matched_risk_id"] = "  "
+        finding = FindingDraft.from_model("T001", payload, {"R001"})
+        self.assertEqual(finding.matched_risk_id, "")
+
+    def test_finding_needs_review_is_required_but_review_status_defaults(self):
+        payload = self.valid_payload()
+        del payload["needs_review"]
+        with self.assertRaises(ValidationError):
+            FindingDraft.from_model("T001", payload, {"R001"})
+        finding = FindingDraft.from_model("T001", self.valid_payload(), {"R001"})
+        self.assertEqual(finding.review_status, "待确认")
 
     def test_score_strictness(self):
         for value in (True, False, 1.0, "3", 0, 6, "abc"):
@@ -94,6 +108,10 @@ class DesktopModelsTests(unittest.TestCase):
     def test_exact_dataclass_fields(self):
         self.assertEqual([f.name for f in fields(AnalysisTask)], ["task_id", "file_name", "file_hash", "created_at", "status", "model_profile", "extraction_method"])
         self.assertEqual([f.name for f in fields(ExtractedBlock)], ["locator", "text", "method", "needs_review", "image_path"])
+        finding_fields = fields(FindingDraft)
+        self.assertEqual(finding_fields[-2].name, "needs_review")
+        self.assertIs(finding_fields[-2].default, MISSING)
+        self.assertEqual(finding_fields[-1].default, "待确认")
 
 
 if __name__ == "__main__":

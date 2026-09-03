@@ -95,15 +95,16 @@ class FindingDraft:
     likelihood: int | None
     impact_scores: dict[str, int | None]
     rationale: str
-    needs_review: bool = False
+    needs_review: bool
     review_status: ReviewStatus = "待确认"
 
     def __post_init__(self) -> None:
-        for name in ("task_id", "finding_id", "title", "fact_summary", "source_page", "source_excerpt", "matched_risk_id", "rationale"):
+        for name in ("task_id", "finding_id", "title", "fact_summary", "source_page", "source_excerpt", "rationale"):
             _text(getattr(self, name), name)
         _domain(self.domain)
-        if not self.matched_risk_id.strip():
-            raise ValidationError("matched_risk_id不能为空")
+        if not isinstance(self.matched_risk_id, str):
+            raise ValidationError("matched_risk_id必须是字符串")
+        self.matched_risk_id = self.matched_risk_id.strip()
         self.likelihood = score_or_none(self.likelihood)
         self.impact_scores = _scores(self.impact_scores)
         if not isinstance(self.needs_review, bool) or self.review_status not in ("待确认", "已接受", "已排除"):
@@ -114,10 +115,14 @@ class FindingDraft:
         if not isinstance(payload, Mapping):
             raise ValidationError("模型结果必须是对象")
         risk_id = payload.get("matched_risk_id")
-        _text(risk_id, "matched_risk_id")
-        if risk_id not in known_risk_ids:
+        if not isinstance(risk_id, str):
+            raise ValidationError("matched_risk_id必须是字符串")
+        risk_id = risk_id.strip()
+        if risk_id and risk_id not in known_risk_ids:
             raise ValidationError(f"未知风险ID: {risk_id}")
-        return cls(task_id=task_id, finding_id=payload.get("finding_id"), title=payload.get("title"), fact_summary=payload.get("fact_summary"), source_page=payload.get("source_page"), source_excerpt=payload.get("source_excerpt"), matched_risk_id=risk_id, domain=payload.get("domain"), likelihood=payload.get("likelihood"), impact_scores=payload.get("impact_scores"), rationale=payload.get("rationale"), needs_review=payload.get("needs_review", False), review_status=payload.get("review_status", "待确认"))
+        if "needs_review" not in payload:
+            raise ValidationError("needs_review不能为空")
+        return cls(task_id=task_id, finding_id=payload.get("finding_id"), title=payload.get("title"), fact_summary=payload.get("fact_summary"), source_page=payload.get("source_page"), source_excerpt=payload.get("source_excerpt"), matched_risk_id=risk_id, domain=payload.get("domain"), likelihood=payload.get("likelihood"), impact_scores=payload.get("impact_scores"), rationale=payload.get("rationale"), needs_review=payload["needs_review"], review_status=payload.get("review_status", "待确认"))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
