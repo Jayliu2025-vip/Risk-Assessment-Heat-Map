@@ -18,7 +18,8 @@ import threading
 from typing import Any, Callable, Iterable
 from uuid import uuid4
 
-from .extraction import ExtractionResult
+from . import extraction
+from .extraction import ExtractionError, ExtractionResult
 from .model_client import serialize_evidence_blocks
 from .models import AnalysisTask, FindingDraft, ModelProfile, ValidationError
 from .storage import DesktopStore
@@ -116,14 +117,23 @@ class AnalysisPipeline:
 
     def _snapshot_source(self, source: Path, task_id: str) -> tuple[Path, str]:
         """Copy and hash one immutable per-task input without retaining its path."""
-        directory = self.temp_files.create(task_id)
-        snapshot = directory / f"source_snapshot{source.suffix.lower()}"
-        digest = hashlib.sha256()
         try:
+            if source.stat().st_size > extraction.MAX_SOURCE_BYTES:
+                raise ExtractionError("FILE_TOO_LARGE", "输入文件超过安全大小限制")
+            directory = self.temp_files.create(task_id)
+            snapshot = directory / f"source_snapshot{source.suffix.lower()}"
+            digest = hashlib.sha256()
+            copied = 0
             with source.open("rb") as input_file, snapshot.open("xb") as output_file:
                 while chunk := input_file.read(_HASH_CHUNK_BYTES):
+                    if copied + len(chunk) > extraction.MAX_SOURCE_BYTES:
+                        raise ExtractionError("FILE_TOO_LARGE", "输入文件超过安全大小限制")
                     digest.update(chunk)
                     output_file.write(chunk)
+                    copied += len(chunk)
+        except ExtractionError:
+            self.temp_files.cleanup(task_id)
+            raise
         except Exception:
             self.temp_files.cleanup(task_id)
             raise ValueError("所选文件不可用") from None

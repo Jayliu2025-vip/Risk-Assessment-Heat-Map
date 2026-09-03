@@ -11,6 +11,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from desktop.extraction import ExtractionError, ExtractionResult
 from desktop.models import ExtractedBlock, FindingDraft, ModelProfile
@@ -438,6 +439,53 @@ class PipelineTests(unittest.TestCase):
             self.assertNotIn("MODEL_FAILED", codes)
         else:
             self.assertEqual(codes[-1], "MODEL_FAILED")
+
+    def test_snapshot_rejects_initially_oversized_source_before_task_persistence(self) -> None:
+        self.source.write_bytes(b"123456")
+        pipeline, _, _ = self.pipeline()
+        with patch("desktop.extraction.MAX_SOURCE_BYTES", 5), self.assertRaises(ExtractionError) as raised:
+            pipeline.start(self.source, "synthetic")
+        self.assertEqual(raised.exception.code, "FILE_TOO_LARGE")
+        self.assertEqual(list(self.tasks.root.iterdir()) if self.tasks.root.exists() else [], [])
+        connection = sqlite3.connect(self.root / "state.sqlite3")
+        try:
+            self.assertEqual(connection.execute("SELECT count(*) FROM analysis_tasks").fetchone()[0], 0)
+        finally:
+            connection.close()
+
+    def test_snapshot_aborts_when_source_grows_during_streaming_copy(self) -> None:
+        self.source.write_bytes(b"1234")
+        pipeline, _, _ = self.pipeline()
+        original_open = Path.open
+
+        class GrowingReader:
+            def __init__(self) -> None:
+                self.chunks = iter((b"1234", b"56"))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *unused):
+                return False
+
+            def read(self, size: int) -> bytes:
+                return next(self.chunks, b"")
+
+        def open_with_growth(path: Path, mode: str = "r", *args, **kwargs):
+            if path == self.source and mode == "rb":
+                return GrowingReader()
+            return original_open(path, mode, *args, **kwargs)
+
+        with patch("desktop.extraction.MAX_SOURCE_BYTES", 5), patch.object(Path, "open", open_with_growth), self.assertRaises(ExtractionError) as raised:
+            pipeline.start(self.source, "synthetic")
+        self.assertEqual(raised.exception.code, "FILE_TOO_LARGE")
+        self.assertEqual(self.source.read_bytes(), b"1234")
+        self.assertEqual(list(self.tasks.root.iterdir()) if self.tasks.root.exists() else [], [])
+        connection = sqlite3.connect(self.root / "state.sqlite3")
+        try:
+            self.assertEqual(connection.execute("SELECT count(*) FROM analysis_tasks").fetchone()[0], 0)
+        finally:
+            connection.close()
 
     def test_cleanup_residue_is_safe_and_source_is_untouched(self) -> None:
         class FailingCleanup(TaskTempFiles):
