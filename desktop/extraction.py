@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 from typing import Protocol
 from pathlib import PurePosixPath
+import re
 import zipfile
 
 import pypdfium2
@@ -31,6 +32,8 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
 MAX_RENDER_PIXELS = 25_000_000
 PDF_RENDER_SCALE = 2.0
+MAX_DOCX_PREVIEW_CHARS = 20_000
+_DOCX_PREVIEW_LOCATOR = re.compile(r"^Word (段落|表格) ([1-9][0-9]*)$")
 
 
 class OcrReader(Protocol):
@@ -320,6 +323,41 @@ def _extract_docx(path: Path, temp_root: Path, ocr: OcrReader) -> list[Extracted
         raise
     except Exception as exc:
         raise ExtractionError("DOCX_READ_FAILED", f"无法读取Word文件：{path.name}") from exc
+
+
+def extract_docx_source_text(path: Path, locator: str) -> str:
+    """Re-read one structural DOCX location from a hash-checked snapshot."""
+    match = _DOCX_PREVIEW_LOCATOR.fullmatch(locator) if isinstance(locator, str) else None
+    if match is None:
+        raise ExtractionError("DOCX_LOCATOR_INVALID", "Word来源位置格式无效")
+    source = Path(path)
+    _source_size_ok(source)
+    _preflight_docx(source)
+    kind, wanted = match.group(1), int(match.group(2))
+    try:
+        document = Document(source)
+        count = 0
+        for child in document.element.body.iterchildren():
+            if kind == "段落" and child.tag.endswith("}p"):
+                count += 1
+                if count == wanted:
+                    text = Paragraph(child, document).text.strip()
+                    break
+            elif kind == "表格" and child.tag.endswith("}tbl"):
+                count += 1
+                if count == wanted:
+                    table = Table(child, document)
+                    text = "\n".join("\t".join(cell.text for cell in row.cells) for row in table.rows).strip()
+                    break
+        else:
+            raise ExtractionError("DOCX_LOCATOR_NOT_FOUND", "Word来源位置不存在")
+    except ExtractionError:
+        raise
+    except Exception as exc:
+        raise ExtractionError("DOCX_READ_FAILED", f"无法读取Word文件：{source.name}") from exc
+    if not text:
+        raise ExtractionError("DOCX_PREVIEW_EMPTY", "Word来源位置没有可显示文本")
+    return text[:MAX_DOCX_PREVIEW_CHARS]
 
 
 def _aggregate_method(blocks: list[ExtractedBlock]) -> str:

@@ -6,10 +6,13 @@ from dataclasses import asdict
 import hashlib
 import inspect
 from pathlib import Path
+import shutil
 import tempfile
 import threading
 import unittest
 from unittest.mock import patch
+
+from docx import Document
 
 from desktop.models import AnalysisTask, FindingDraft, ModelProfile
 from desktop.storage import DesktopStore
@@ -93,7 +96,7 @@ class DesktopBridgeTests(unittest.TestCase):
         self.report = self.root / "synthetic.pdf"
         self.report.write_bytes(b"synthetic-pdf")
         self.workbook = self.root / "synthetic.xlsx"
-        self.workbook.write_bytes(b"synthetic-workbook")
+        shutil.copy2(Path(__file__).resolve().parents[1] / "audit_risk_register.xlsx", self.workbook)
         from desktop.bridge import DesktopBridge
         self.bridge = DesktopBridge(
             store=self.store, pipeline=self.pipeline, credential_store=CredentialMemory(),
@@ -123,7 +126,15 @@ class DesktopBridgeTests(unittest.TestCase):
         return {"action": "create", "finding_ids": [finding_id], "risk_id": "",
                 "name": "合成风险", "domain": "采购与外包", "description": "合成事实",
                 "owner_dept": "审计部", "period": period, "likelihood": 3,
-                "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "合成依据", "controls": []}
+                "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "合成依据",
+                "remediation_status": "未整改", "controls": []}
+
+    def bind_workbook(self, task_id="T-1", period="2026H1", path=None):
+        path = path or self.workbook
+        token = self.select(path, "workbook")["selection_token"]
+        from desktop.workbook_writer import load_risk_catalog
+        self.bridge._task_workbooks[task_id] = (path.resolve(), token, digest(path), period, load_risk_catalog(path))
+        return token
 
     def test_exact_js_public_allowlist(self):
         actual = {name for name, value in inspect.getmembers(type(self.bridge), inspect.isfunction) if not name.startswith("_")}
@@ -134,12 +145,12 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(chosen["ok"], True)
         self.assertEqual(chosen["basename"], "synthetic.pdf")
         self.assertNotIn(str(self.report), str(chosen))
-        wrong = self.bridge.start_analysis(chosen["selection_token"], "synthetic")
+        wrong = self.bridge.start_analysis(chosen["selection_token"], "missing", "2026H1", "synthetic")
         self.assertFalse(wrong["ok"])
-        self.assertEqual(wrong["code"], "MODEL_PROFILE_NOT_FOUND")
+        self.assertEqual(wrong["code"], "SELECTION_NOT_FOUND")
         workbook = self.select(self.workbook, "workbook")
-        self.assertEqual(self.bridge.start_analysis(workbook["selection_token"], "synthetic")["code"], "SELECTION_PURPOSE_INVALID")
-        self.assertEqual(self.bridge.start_analysis("stale", "synthetic")["code"], "SELECTION_NOT_FOUND")
+        self.assertEqual(self.bridge.start_analysis(workbook["selection_token"], workbook["selection_token"], "2026H1", "synthetic")["code"], "SELECTION_PURPOSE_INVALID")
+        self.assertEqual(self.bridge.start_analysis("stale", workbook["selection_token"], "2026H1", "synthetic")["code"], "SELECTION_NOT_FOUND")
 
     def test_profile_never_echoes_secret_and_connection_returns_hostname(self):
         saved = self.bridge.save_model_profile(self.profile())
@@ -163,8 +174,10 @@ class DesktopBridgeTests(unittest.TestCase):
 
     def test_start_task_findings_are_serializable_and_never_source_path(self):
         self.bridge.save_model_profile(self.profile())
+        self.bridge.test_model_profile("synthetic")
         selected = self.select(self.report)
-        started = self.bridge.start_analysis(selected["selection_token"], "synthetic")
+        workbook = self.select(self.workbook, "workbook")
+        started = self.bridge.start_analysis(selected["selection_token"], workbook["selection_token"], "2026H1", "synthetic")
         self.assertTrue(started["ok"])
         self.assertNotIn(str(self.report), str(started))
         self.store.save_findings([finding("T-1")])
@@ -173,7 +186,7 @@ class DesktopBridgeTests(unittest.TestCase):
 
     def test_error_sanitizer_hides_secret_path_and_report_body(self):
         self.bridge._pipeline = type("Bad", (), {"start": lambda *_: (_ for _ in ()).throw(RuntimeError("sk-secret C:\\secret\\report.pdf 完整报告正文"))})()
-        result = self.bridge.start_analysis("missing", "synthetic")
+        result = self.bridge.start_analysis("missing", "missing", "2026H1", "synthetic")
         self.assertFalse(result["ok"])
         for forbidden in ("sk-secret", "C:\\secret", "完整报告正文"):
             self.assertNotIn(forbidden, str(result))
@@ -188,13 +201,57 @@ class DesktopBridgeTests(unittest.TestCase):
         self.report.write_bytes(b"changed")
         self.assertEqual(self.bridge.get_source_preview("T-1", "F-1")["code"], "SOURCE_HASH_CHANGED")
         self.assertEqual(self.bridge.get_source_preview("other", "F-1")["code"], "SOURCE_RESELECT_REQUIRED")
-        docx = self.root / "synthetic.docx"; docx.write_bytes(b"x")
+        docx = self.root / "synthetic.docx"
+        document = Document()
+        document.add_paragraph("第一段虚构内容")
+        document.add_paragraph("第二段来自哈希校验后的 Word 源文件，包含虚构单位甲和金额 12 万元。")
+        document.save(docx)
         self.seed_task("T-docx", docx)
-        self.store.save_findings([finding("T-docx", "F-docx", source_page="第 2 段", source_excerpt="有限摘录")])
+        self.store.save_findings([finding("T-docx", "F-docx", source_page="Word 段落 2", source_excerpt="模型伪造摘录，不得回显")])
         token = self.select(docx)["selection_token"]
         self.bridge._task_sources["T-docx"] = (docx, token)
         preview = self.bridge.get_source_preview("T-docx", "F-docx")
-        self.assertEqual(preview, {"ok": True, "kind": "text", "source_page": "第 2 段", "source_excerpt": "有限摘录"})
+        self.assertEqual(preview, {"ok": True, "kind": "text", "source_page": "Word 段落 2",
+                                   "source_excerpt": "第二段来自哈希校验后的 Word 源文件，包含虚构单位甲和金额 12 万元。"})
+        self.assertNotIn("模型伪造摘录", str(preview))
+
+    def test_docx_preview_parser_is_injectable_and_receives_private_snapshot(self):
+        docx = self.root / "source.docx"
+        document = Document(); document.add_paragraph("虚构正文"); document.save(docx)
+        self.seed_task("T-docx-injected", docx)
+        self.store.save_findings([finding("T-docx-injected", "F-docx", source_page="Word 段落 1")])
+        seen = []
+        self.bridge._docx_preview_extractor = lambda path, locator: (seen.append((Path(path), locator)) or "重新提取文本")
+        token = self.select(docx)["selection_token"]
+        self.bridge._task_sources["T-docx-injected"] = (docx, token)
+        preview = self.bridge.get_source_preview("T-docx-injected", "F-docx")
+        self.assertEqual(preview["source_excerpt"], "重新提取文本")
+        self.assertNotEqual(seen[0][0], docx)
+        self.assertEqual(seen[0][1], "Word 段落 1")
+
+    def test_model_test_is_bound_to_current_profile_and_credential(self):
+        self.bridge.save_model_profile(self.profile())
+        report = self.select(self.report)["selection_token"]
+        workbook = self.select(self.workbook, "workbook")["selection_token"]
+        self.assertEqual(self.bridge.start_analysis(report, workbook, "2026H1", "synthetic")["code"], "MODEL_PROFILE_TEST_REQUIRED")
+        self.bridge.test_model_profile("synthetic")
+        self.assertTrue(self.bridge.start_analysis(report, workbook, "2026H1", "synthetic")["ok"])
+        changed = {**self.profile(), "model": "changed-model", "api_key": "sk-new"}
+        self.bridge.save_model_profile(changed)
+        self.assertEqual(self.bridge.start_analysis(report, workbook, "2026H1", "synthetic")["code"], "MODEL_PROFILE_TEST_REQUIRED")
+
+    def test_analysis_catalog_and_later_commit_are_bound_to_selected_workbook_hash(self):
+        self.bridge.save_model_profile(self.profile()); self.bridge.test_model_profile("synthetic")
+        report = self.select(self.report)["selection_token"]
+        workbook = self.select(self.workbook, "workbook")["selection_token"]
+        started = self.bridge.start_analysis(report, workbook, "2026H1", "synthetic")
+        self.assertTrue(started["ok"])
+        catalog = self.pipeline.calls[-1][2]
+        row = next(item for item in catalog if item["risk_id"] == "R001" and item["period"] == "2026H1")
+        self.assertEqual(row["owner_dept"], "财务部")
+        self.workbook.write_bytes(b"changed after analysis")
+        blocked = self.bridge.preview_commit("T-1", workbook, "2026H1", [self.create_decision()], "preview", True)
+        self.assertEqual(blocked["code"], "WORKBOOK_HASH_CHANGED")
 
     def test_pdf_preview_renders_private_snapshot_and_rejects_oversized_png(self):
         self.seed_task()
@@ -226,7 +283,7 @@ class DesktopBridgeTests(unittest.TestCase):
             self.assertEqual(self.bridge.get_source_preview("T-1", "F-1", selected["selection_token"])["code"], "PREVIEW_BUSY")
         finally:
             self.bridge._preview_slots.release()
-        selected = self.select(self.workbook, "workbook")
+        selected = {"selection_token": self.bind_workbook()}
         decision = [self.create_decision()]
         preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", decision, "preview", True)
         with patch("desktop.bridge.load_dataset", return_value=({}, [{"risk_id": "R001", "name": "合成风险", "domain": "采购与外包", "description": "合成事实", "owner_dept": "审计部", "period": "2026H1", "likelihood": 3, **{dim: 2 for dim in DIMS}, "rationale": "合成依据"}], [])):
@@ -302,7 +359,10 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(saved["finding"]["finding_id"], "F-1")
         merged = self.bridge.merge_findings("T-1", ["F-1", "F-2"], asdict(finding("x", "x")))
         self.assertTrue(merged["ok"])
-        self.assertEqual([item.review_status for item in self.store.list_findings("T-1")], ["待确认", "已排除"])
+        stored = {item.finding_id: item for item in self.store.list_findings("T-1")}
+        self.assertEqual(stored["F-2"].review_status, "已接受")
+        self.assertEqual(stored["F-2"].merged_into, "F-1")
+        self.assertEqual(stored["F-1"].merged_finding_ids, ("F-2",))
         before = [asdict(item) for item in self.store.list_findings("T-1")]
         invalid = self.bridge.split_finding("T-1", "F-1", [asdict(finding("x", "new")), {"finding_id": "bad"}])
         self.assertFalse(invalid["ok"])
@@ -315,7 +375,7 @@ class DesktopBridgeTests(unittest.TestCase):
 
     def test_preview_and_commit_bind_selection_token_and_return_output_paths(self):
         self.seed_task()
-        selected = self.select(self.workbook, "workbook")
+        selected = {"selection_token": self.bind_workbook()}
         decision = self.create_decision()
         preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", [decision], "preview", True)
         self.assertEqual(preview["commit_token"], "token-1")
@@ -345,9 +405,9 @@ class DesktopBridgeTests(unittest.TestCase):
         report_one = self.select(self.report)["selection_token"]
         report_two = self.select(second_report)["selection_token"]
         self.bridge._task_sources.update({"T-1": (self.report, report_one), "T-2": (second_report, report_two)})
-        first_book = self.select(self.workbook, "workbook")["selection_token"]
-        second_book_file = self.root / "second.xlsx"; second_book_file.write_bytes(b"second synthetic workbook")
-        second_book = self.select(second_book_file, "workbook")["selection_token"]
+        first_book = self.bind_workbook("T-1")
+        second_book_file = self.root / "second.xlsx"; shutil.copy2(self.workbook, second_book_file)
+        second_book = self.bind_workbook("T-2", path=second_book_file)
         decision = [self.create_decision()]
         self.bridge.preview_commit("T-1", first_book, "2026H1", decision, "preview", True)
         self.bridge.preview_commit("T-2", second_book, "2026H1", decision, "preview", True)
@@ -372,7 +432,7 @@ class DesktopBridgeTests(unittest.TestCase):
         split = self.bridge.split_finding("T-1", "F-1", [asdict(finding("T-1", "F-1-A")), asdict(finding("T-1", "F-1-B"))])
         self.assertEqual(set(split) - {"ok"}, {"findings"})
         self.assertEqual({item["finding_id"] for item in split["findings"]}, {"F-1", "F-1-A", "F-1-B"})
-        selected = self.select(self.workbook, "workbook")
+        selected = {"selection_token": self.bind_workbook()}
         decision = [self.create_decision("F-1-A")]
         preview = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", decision, "preview", True)
         self.assertEqual(set(preview) - {"ok"}, {"commit_token", "new_risks", "updated_risks", "new_controls", "excluded_count", "warnings"})
@@ -383,14 +443,14 @@ class DesktopBridgeTests(unittest.TestCase):
 
     def test_preview_rejects_decisions_outside_the_selected_period(self):
         self.seed_task()
-        selected = self.select(self.workbook, "workbook")
+        selected = {"selection_token": self.bind_workbook()}
         wrong_period = self.bridge.preview_commit("T-1", selected["selection_token"], "2026H1", [self.create_decision(period="2026H2")])
         self.assertFalse(wrong_period["ok"])
         self.assertEqual(self.writer.preview_calls, [])
 
     def test_preview_loads_current_controls_before_confirmed_final_preview(self):
         self.seed_task()
-        selected = self.select(self.workbook, "workbook")
+        selected = {"selection_token": self.bind_workbook()}
         identities = [{"finding_ids": ["F-1"], "action": "merge", "risk_id": "R001", "period": "2026H1"}]
         current = [{"description": "保留的合成控制", "score": 4, "key": True}]
         with patch("desktop.bridge.load_current_controls", return_value=[{**identities[0], "controls": current}]) as loaded:
@@ -422,6 +482,24 @@ class DesktopBridgeTests(unittest.TestCase):
 
 
 class AppBootstrapTests(unittest.TestCase):
+    def test_build_bridge_does_not_load_a_packaged_example_risk_catalog(self):
+        from desktop import app
+
+        class Credentials(CredentialMemory):
+            def assert_windows_backend(self): pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bridge = app.build_bridge(
+                state_path=root / "state.db", temp_path=root / "tasks",
+                credential_store=Credentials(),
+                resource_provider=lambda name: (_ for _ in ()).throw(AssertionError(f"packaged resource read: {name}")),
+            )
+            try:
+                self.assertEqual(bridge.get_bootstrap()["risk_catalog"], [])
+            finally:
+                bridge._pipeline.close()
+
     def test_main_creates_private_edge_window_and_closes_pipeline(self):
         from desktop import app
 

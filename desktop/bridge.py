@@ -6,6 +6,7 @@ import base64
 from dataclasses import asdict
 from io import BytesIO
 import hashlib
+import json
 from pathlib import Path
 import re
 import secrets
@@ -14,11 +15,12 @@ import threading
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlparse
 
-from .extraction import ExtractionError, MAX_PDF_PAGES, MAX_RENDER_PIXELS, MAX_SOURCE_BYTES, PDF_RENDER_SCALE
+from .extraction import (ExtractionError, MAX_PDF_PAGES, MAX_RENDER_PIXELS, MAX_SOURCE_BYTES,
+                         PDF_RENDER_SCALE, extract_docx_source_text)
 from .model_client import ModelError
 from .models import ConfirmedControl, FindingDraft, ModelProfile, RiskDecision, ValidationError
 from tools.common import DIMS, load_dataset
-from .workbook_writer import load_current_controls
+from .workbook_writer import load_current_controls, load_risk_catalog
 
 
 _PAGE = re.compile(r"^第 ([1-9][0-9]*) 页$")
@@ -89,6 +91,8 @@ class DesktopBridge:
     def __init__(self, *, store: Any, pipeline: Any, credential_store: Any,
                  model_client_factory: Callable[[ModelProfile, str], Any], workbook_writer: Any,
                  risk_catalog: Iterable[Mapping[str, Any]], pdf_preview_renderer: Callable[[Path, int], bytes] | None = None,
+                 docx_preview_extractor: Callable[[Path, str], str] | None = None,
+                 risk_catalog_loader: Callable[[Path], list[dict[str, Any]]] | None = None,
                  webview_module: Any | None = None, profile_lock: threading.RLock | None = None) -> None:
         self._store = store
         self._pipeline = pipeline
@@ -97,11 +101,15 @@ class DesktopBridge:
         self._workbook_writer = workbook_writer
         self._risk_catalog = [dict(item) for item in risk_catalog]
         self._pdf_preview_renderer = pdf_preview_renderer or self._render_pdf_page
+        self._docx_preview_extractor = docx_preview_extractor or extract_docx_source_text
+        self._risk_catalog_loader = risk_catalog_loader or load_risk_catalog
         self._webview = webview_module
         self._window: Any | None = None
         self._selections: dict[str, tuple[Path, str]] = {}
         self._task_sources: dict[str, tuple[Path, str]] = {}
+        self._task_workbooks: dict[str, tuple[Path, str, str, str, list[dict[str, Any]]]] = {}
         self._commit_previews: dict[str, tuple[str, str, str, tuple[RiskDecision, ...]]] = {}
+        self._tested_profiles: dict[str, str] = {}
         self._profile_lock = profile_lock or threading.RLock()
         self._task_locks: dict[str, threading.RLock] = {}
         self._task_locks_guard = threading.Lock()
@@ -153,6 +161,33 @@ class DesktopBridge:
             if profile.name == name.strip():
                 return profile
         raise _BridgeError("MODEL_PROFILE_NOT_FOUND", "模型配置不存在")
+
+    @staticmethod
+    def _profile_fingerprint(profile: ModelProfile, credential: str) -> str:
+        payload = {"profile": asdict(profile), "credential_sha256": hashlib.sha256(credential.encode("utf-8")).hexdigest()}
+        return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def _verified_profile(self, name: Any) -> ModelProfile:
+        with self._profile_lock:
+            profile = self._get_profile(name)
+            credential = self._credential_store.get_api_key(profile.name)
+            if not isinstance(credential, str) or not credential.strip():
+                raise _BridgeError("MODEL_CREDENTIAL_NOT_FOUND", "未找到模型密钥")
+            if self._tested_profiles.get(profile.name) != self._profile_fingerprint(profile, credential):
+                raise _BridgeError("MODEL_PROFILE_TEST_REQUIRED", "当前模型配置尚未通过连接测试")
+            return profile
+
+    def _bound_workbook(self, task_id: str, token: Any, period: Any) -> Path:
+        binding = self._task_workbooks.get(task_id)
+        if binding is None:
+            raise _BridgeError("WORKBOOK_RESELECT_REQUIRED", "分析所用工作簿已失效，请重新开始分析")
+        path, expected_token, expected_hash, expected_period, _ = binding
+        if token != expected_token or period != expected_period:
+            raise _BridgeError("WORKBOOK_SELECTION_MISMATCH", "必须使用开始分析时选择的工作簿和期间")
+        selected = self._selection(token, "workbook")
+        if selected != path or _file_hash(selected) != expected_hash:
+            raise _BridgeError("WORKBOOK_HASH_CHANGED", "工作簿已变更，请重新开始分析")
+        return selected
 
     def _get_finding(self, task_id: Any, finding_id: Any) -> FindingDraft:
         if not isinstance(task_id, str) or not isinstance(finding_id, str):
@@ -214,7 +249,7 @@ class DesktopBridge:
             raise ValidationError("finding必须是对象")
         allowed = {"task_id", "finding_id", "title", "fact_summary", "source_page", "source_excerpt",
                    "matched_risk_id", "domain", "likelihood", "impact_scores", "rationale",
-                   "needs_review", "review_status"}
+                   "needs_review", "review_status", "merged_finding_ids", "merged_into"}
         if set(payload) - allowed or any(dimension in payload for dimension in DIMS):
             raise ValidationError("finding字段无效")
         scores = payload.get("impact_scores")
@@ -251,7 +286,7 @@ class DesktopBridge:
         tasks = [asdict(item) for item in getattr(self._store, "list_tasks", lambda: [])()]
         return {"profiles": [asdict(item) for item in self._store.list_model_profiles()], "tasks": tasks,
                 "domains": list(DOMAINS), "dimensions": list(DIMS), "dimension_labels": dict(DIM_LABELS),
-                "risk_catalog": self._risk_catalog, "capabilities": {"desktop": True, "source_preview": True}}
+                "risk_catalog": [], "capabilities": {"desktop": True, "source_preview": True}}
 
     @_public
     def choose_report(self, purpose: str = "report") -> dict[str, Any]:
@@ -287,6 +322,7 @@ class DesktopBridge:
                 else:
                     self._credential_store.delete_api_key(checked.name)
                 raise
+            self._tested_profiles.pop(checked.name, None)
         return {"profile": asdict(checked)}
 
     @_public
@@ -302,15 +338,24 @@ class DesktopBridge:
             finally:
                 close = getattr(client, "close", None)
                 if callable(close): close()
+            self._tested_profiles[profile.name] = self._profile_fingerprint(profile, key)
         return {"hostname": urlparse(profile.base_url).hostname or ""}
 
     @_public
-    def start_analysis(self, selection_token: Any, profile_name: Any) -> dict[str, Any]:
+    def start_analysis(self, selection_token: Any, workbook_selection_token: Any, period: Any, profile_name: Any) -> dict[str, Any]:
         source = self._selection(selection_token, "report")
-        profile = self._get_profile(profile_name)
-        task = self._pipeline.start(source, profile.name, self._risk_catalog)
+        workbook = self._selection(workbook_selection_token, "workbook")
+        if not isinstance(period, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", period) is None:
+            raise ValidationError("评估期间格式无效")
+        profile = self._verified_profile(profile_name)
+        before = _file_hash(workbook)
+        catalog = self._risk_catalog_loader(workbook)
+        if _file_hash(workbook) != before:
+            raise _BridgeError("WORKBOOK_HASH_CHANGED", "工作簿读取期间发生变更，请重新选择")
+        task = self._pipeline.start(source, profile.name, catalog)
         self._task_sources[task.task_id] = (source, str(selection_token))
-        return {"task": asdict(task)}
+        self._task_workbooks[task.task_id] = (workbook, str(workbook_selection_token), before, period, [dict(item) for item in catalog])
+        return {"task": asdict(task), "risk_catalog": catalog, "period": period}
 
     @_public
     def get_task(self, task_id: Any) -> dict[str, Any]:
@@ -356,9 +401,10 @@ class DesktopBridge:
                 if pending_attachment is not None and self._preview_before_attach is not None:
                     self._preview_before_attach()
                 if source.suffix.lower() == ".docx":
+                    text = self._docx_preview_extractor(snapshot, finding.source_page)
                     if pending_attachment is not None:
                         self._task_sources[task_id] = pending_attachment
-                    return {"kind": "text", "source_page": finding.source_page, "source_excerpt": finding.source_excerpt}
+                    return {"kind": "text", "source_page": finding.source_page, "source_excerpt": text}
                 page = _PAGE.fullmatch(finding.source_page)
                 if page is None:
                     raise _BridgeError("SOURCE_PAGE_INVALID", "来源页码格式无效")
@@ -396,10 +442,22 @@ class DesktopBridge:
             raise ValidationError("至少选择两个不重复发现")
         existing = {item.finding_id: item for item in self._store.list_findings(task_id)}
         if any(item not in existing for item in finding_ids): raise _BridgeError("NOT_FOUND", "请求的发现不存在")
-        merged = self._finding_payload(payload); merged["task_id"], merged["finding_id"] = task_id, finding_ids[0]
+        primary_id = str(finding_ids[0])
+        if any(existing[finding_id].merged_into for finding_id in finding_ids):
+            raise ValidationError("已并入其他发现的条目不能再次合并")
+        linked = []
+        for finding_id in finding_ids:
+            if finding_id != primary_id:
+                linked.append(str(finding_id))
+            linked.extend(existing[finding_id].merged_finding_ids)
+        linked = list(dict.fromkeys(item for item in linked if item != primary_id))
+        merged = self._finding_payload(payload); merged["task_id"], merged["finding_id"] = task_id, primary_id
+        merged["merged_finding_ids"], merged["merged_into"] = linked, ""
         checked = [FindingDraft(**merged)]
         for finding_id in finding_ids[1:]:
-            excluded = asdict(existing[finding_id]); excluded["review_status"] = "已排除"; checked.append(FindingDraft(**excluded))
+            secondary = asdict(existing[finding_id])
+            secondary.update({"review_status": "已接受", "merged_finding_ids": (), "merged_into": primary_id})
+            checked.append(FindingDraft(**secondary))
         saved = self._pipeline.review_findings(task_id, checked)
         return {"findings": [asdict(item) for item in saved]}
 
@@ -427,7 +485,7 @@ class DesktopBridge:
     def preview_commit(self, task_id: Any, workbook_selection_token: Any, period: Any, decisions: Any,
                        stage: Any = "preview", controls_confirmed: Any = False) -> dict[str, Any]:
         with self._task_lock(task_id):
-            source = self._selection(workbook_selection_token, "workbook")
+            source = self._bound_workbook(str(task_id), workbook_selection_token, period)
             if stage == "load_controls":
                 identities = self._control_identities(period, decisions)
                 return {"controls_by_decision": load_current_controls(source, identities)}
@@ -435,6 +493,8 @@ class DesktopBridge:
                 raise ValidationError("必须确认已显示的当前控制点后才能生成预览")
             checked = self._decisions(decisions)
             checked_period = self._decision_period(period, checked)
+            if any(item.action != "exclude" and item.remediation_status == "未确认" for item in checked):
+                raise ValidationError("必须确认整改状态")
             findings = tuple(self._store.list_findings(task_id))
             preview = dict(self._workbook_writer.preview_changes(source, checked, findings))
             token = preview.get("commit_token")
@@ -445,9 +505,11 @@ class DesktopBridge:
     @_public
     def commit_to_workbook(self, task_id: Any, workbook_selection_token: Any, period: Any, decisions: Any, expected_commit_token: Any) -> dict[str, Any]:
         with self._task_lock(task_id):
-            source = self._selection(workbook_selection_token, "workbook")
+            source = self._bound_workbook(str(task_id), workbook_selection_token, period)
             checked = self._decisions(decisions)
             checked_period = self._decision_period(period, checked)
+            if any(item.action != "exclude" and item.remediation_status == "未确认" for item in checked):
+                raise ValidationError("必须确认整改状态")
             remembered = self._commit_previews.get(str(workbook_selection_token))
             if remembered is None or remembered != (str(task_id), checked_period, expected_commit_token, checked):
                 raise _BridgeError("PREVIEW_REQUIRED", "请重新生成提交预览")
@@ -466,6 +528,9 @@ class DesktopBridge:
             source_info = self._task_sources.pop(task_id, None)
             if source_info is not None:
                 self._selections.pop(source_info[1], None)
+            workbook_info = self._task_workbooks.pop(task_id, None)
+            if workbook_info is not None:
+                self._selections.pop(workbook_info[1], None)
             for token, preview in list(self._commit_previews.items()):
                 if preview[0] == task_id:
                     self._commit_previews.pop(token, None)

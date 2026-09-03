@@ -31,22 +31,6 @@ else:
     from .storage import DesktopStore
     from .tempfiles import TaskTempFiles
     from . import workbook_writer
-from tools.common import load_dataset
-
-
-def _catalog(provider: Callable[[str | Path], Path]) -> list[dict]:
-    export_root = provider("data/export")
-    config = export_root / "config.json"
-    if not config.is_file():
-        raise RuntimeError("风险目录资源不可用")
-    catalog: dict[str, dict] = {}
-    for period_dir in sorted(item for item in export_root.iterdir() if item.is_dir()):
-        _, risks, _ = load_dataset(period_dir, config)
-        for risk in risks:
-            catalog.setdefault(str(risk["risk_id"]), dict(risk))
-    return [catalog[key] for key in sorted(catalog)]
-
-
 def build_bridge(*, state_path: Path | None = None, temp_path: Path | None = None,
                  resource_provider: Callable[[str | Path], Path] = resource_path,
                  credential_store: CredentialStore | None = None) -> DesktopBridge:
@@ -54,7 +38,6 @@ def build_bridge(*, state_path: Path | None = None, temp_path: Path | None = Non
     store = DesktopStore(state_path or state_db_path())
     credentials = credential_store or CredentialStore()
     credentials.assert_windows_backend()
-    catalog = _catalog(resource_provider)
     profile_lock = threading.RLock()
 
     def profile_and_key(name: str):
@@ -68,12 +51,12 @@ def build_bridge(*, state_path: Path | None = None, temp_path: Path | None = Non
         ModelClient,
         lambda name: next((item for item in store.list_model_profiles() if item.name == name), None),
         credentials.get_api_key,
-        catalog,
+        (),
         profile_credential_resolver=profile_and_key,
     )
     return DesktopBridge(store=store, pipeline=pipeline, credential_store=credentials,
                          model_client_factory=ModelClient, workbook_writer=workbook_writer,
-                         risk_catalog=catalog, profile_lock=profile_lock)
+                         risk_catalog=(), profile_lock=profile_lock)
 
 
 def _startup_error_page() -> str:
