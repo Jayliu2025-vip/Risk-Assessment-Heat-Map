@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,8 +12,8 @@ from unittest.mock import patch
 import httpx
 
 import desktop.model_client as model_client
-from desktop.model_client import ModelClient, ModelError, normalize_endpoint
-from desktop.models import ModelProfile
+from desktop.model_client import ModelClient, ModelError, normalize_endpoint, serialize_evidence_blocks
+from desktop.models import ExtractedBlock, ModelProfile
 from tests.fakes.openai_server import FakeOpenAIServer
 from tools.common import DIMS
 
@@ -25,11 +26,15 @@ def catalog() -> list[dict[str, str]]:
     return [{"risk_id": "R003", "name": "虚构资金支付风险", "domain": "资金活动", "description": "仅测试使用"}]
 
 
+def evidence(*blocks: tuple[str, str]) -> str:
+    return serialize_evidence_blocks([ExtractedBlock(locator, text, "text") for locator, text in blocks])
+
+
 class ModelClientTests(unittest.TestCase):
     def test_success_sends_safe_rubric_and_returns_pending_drafts(self):
         with FakeOpenAIServer() as server:
             with ModelClient(profile(server.base_url), "secret-key") as client:
-                drafts = client.analyze("T-1", "虚构付款审批记录；虚构新增风险线索；虚构复核缺失记录", catalog(), [])
+                drafts = client.analyze("T-1", evidence(("1", "虚构付款审批记录；虚构新增风险线索；虚构复核缺失记录")), catalog(), [])
         self.assertEqual(len(drafts), 3)
         self.assertTrue(all(d.review_status == "待确认" for d in drafts))
         system = server.requests[0]["messages"][0]["content"]
@@ -47,11 +52,23 @@ class ModelClientTests(unittest.TestCase):
         with FakeOpenAIServer(mode="auth_failed") as server:
             with ModelClient(profile(server.base_url), secret) as client:
                 with self.assertRaises(ModelError) as raised:
-                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+                    client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_AUTH_FAILED")
         self.assertNotIn(secret, str(raised.exception))
         self.assertNotIn(secret, repr(raised.exception))
         self.assertNotIn(secret, json.dumps(server.requests, ensure_ascii=False))
+
+    def test_loopback_http_bypasses_environment_proxy(self):
+        proxy_env = {
+            "HTTP_PROXY": "http://127.0.0.1:1", "HTTPS_PROXY": "http://127.0.0.1:1", "ALL_PROXY": "http://127.0.0.1:1", "NO_PROXY": "",
+            "http_proxy": "http://127.0.0.1:1", "https_proxy": "http://127.0.0.1:1", "all_proxy": "http://127.0.0.1:1", "no_proxy": "",
+        }
+        with FakeOpenAIServer() as server:
+            with patch.dict(os.environ, proxy_env):
+                with ModelClient(profile(server.base_url), "proxy-secret") as client:
+                    findings = client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
+        self.assertTrue(findings)
+        self.assertEqual(len(server.requests), 1)
 
     def test_endpoint_normalization_and_rejections_are_exact(self):
         self.assertEqual(normalize_endpoint("https://localhost/v1"), "https://localhost/v1/chat/completions")
@@ -75,22 +92,22 @@ class ModelClientTests(unittest.TestCase):
             with self.subTest(mode=mode), FakeOpenAIServer(mode=mode) as server:
                 with ModelClient(profile(server.base_url), "k") as client:
                     with self.assertRaises(ModelError) as raised:
-                        client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+                        client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
                 self.assertEqual(raised.exception.code, code)
         with ModelClient(profile("http://127.0.0.1:1"), "k") as client:
             with self.assertRaises(ModelError) as raised:
-                client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+                client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_CONNECTION_FAILED")
 
         with FakeOpenAIServer(mode="auth") as server:
             with ModelClient(profile(server.base_url), "k") as client:
                 with self.assertRaises(ModelError) as raised:
-                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+                    client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_AUTH_FAILED")
         with FakeOpenAIServer(mode="oversized") as server:
             with ModelClient(profile(server.base_url), "k") as client:
                 with self.assertRaises(ModelError) as raised:
-                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+                    client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_RESPONSE_TOO_LARGE")
 
     def test_timeout_maps_to_safe_code(self):
@@ -98,7 +115,7 @@ class ModelClientTests(unittest.TestCase):
             with ModelClient(profile(server.base_url), "k") as client:
                 client._client.timeout = httpx.Timeout(0.01, connect=0.01)
                 with self.assertRaises(ModelError) as raised:
-                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+                    client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_TIMEOUT")
 
     def test_vision_content_is_opt_in_and_text_mode_forces_review(self):
@@ -107,12 +124,12 @@ class ModelClientTests(unittest.TestCase):
             image.write_bytes(b"synthetic-png")
             with FakeOpenAIServer() as server:
                 with ModelClient(profile(server.base_url, vision=True), "k") as client:
-                    client.analyze("T-1", "虚构付款审批记录；虚构新增风险线索；虚构复核缺失记录", catalog(), [image])
+                    client.analyze("T-1", evidence(("1", "虚构付款审批记录；虚构新增风险线索；虚构复核缺失记录")), catalog(), [image])
                 vision_payload = server.requests[-1]
             self.assertIn("data:image/png;base64,", json.dumps(vision_payload, ensure_ascii=False))
             with FakeOpenAIServer() as server:
                 with ModelClient(profile(server.base_url, vision=False), "k") as client:
-                    drafts = client.analyze("T-1", "虚构付款审批记录；虚构新增风险线索；虚构复核缺失记录", catalog(), [image])
+                    drafts = client.analyze("T-1", evidence(("1", "虚构付款审批记录；虚构新增风险线索；虚构复核缺失记录")), catalog(), [image])
                 text_payload = server.requests[-1]
             self.assertNotIn("base64", json.dumps(text_payload, ensure_ascii=False))
             self.assertTrue(all(item.needs_review for item in drafts))
@@ -124,18 +141,18 @@ class ModelClientTests(unittest.TestCase):
             image.write_bytes(b"synthetic-png")
             with FakeOpenAIServer(content=json.dumps(payload, ensure_ascii=False)) as server:
                 with ModelClient(profile(server.base_url, vision=True), "k") as client:
-                    findings = client.analyze("T-1", "虚构付款审批记录", catalog(), [image])
+                    findings = client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [image])
         self.assertTrue(findings[0].needs_review)
 
     def test_fenced_json_is_allowed_but_prose_is_rejected(self):
         response = json.dumps({"findings": []}, ensure_ascii=False)
         with FakeOpenAIServer(content=f"```json\n{response}\n```") as server:
             with ModelClient(profile(server.base_url), "k") as client:
-                self.assertEqual(client.analyze("T-1", "虚构文本", catalog(), []), [])
+                self.assertEqual(client.analyze("T-1", evidence(("1", "虚构文本")), catalog(), []), [])
         with FakeOpenAIServer(content=f"说明：\n{response}") as server:
             with ModelClient(profile(server.base_url), "k") as client:
                 with self.assertRaises(ModelError) as raised:
-                    client.analyze("T-1", "虚构文本", catalog(), [])
+                    client.analyze("T-1", evidence(("1", "虚构文本")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_OUTPUT_INVALID")
 
     def test_invalid_model_finding_and_duplicate_ids_are_rejected(self):
@@ -146,13 +163,13 @@ class ModelClientTests(unittest.TestCase):
             with self.subTest(field=field), FakeOpenAIServer(content=json.dumps(payload, ensure_ascii=False)) as server:
                 with ModelClient(profile(server.base_url), "k") as client:
                     with self.assertRaises(ModelError) as raised:
-                        client.analyze("T-1", "虚构文本", catalog(), [])
+                        client.analyze("T-1", evidence(("1", "虚构文本")), catalog(), [])
                 self.assertEqual(raised.exception.code, "MODEL_OUTPUT_INVALID")
         duplicate = {"findings": [base["findings"][0], base["findings"][0]]}
         with FakeOpenAIServer(content=json.dumps(duplicate, ensure_ascii=False)) as server:
             with ModelClient(profile(server.base_url), "k") as client:
                 with self.assertRaises(ModelError) as raised:
-                    client.analyze("T-1", "虚构文本", catalog(), [])
+                    client.analyze("T-1", evidence(("1", "虚构文本")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_OUTPUT_INVALID")
 
     def test_extra_model_finding_fields_are_rejected(self):
@@ -160,26 +177,31 @@ class ModelClientTests(unittest.TestCase):
         with FakeOpenAIServer(content=json.dumps(payload, ensure_ascii=False)) as server:
             with ModelClient(profile(server.base_url), "k") as client:
                 with self.assertRaises(ModelError) as raised:
-                    client.analyze("T-1", "虚构文本", catalog(), [])
+                    client.analyze("T-1", evidence(("1", "虚构文本")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_OUTPUT_INVALID")
 
     def test_unsupported_source_excerpt_requires_review(self):
         with FakeOpenAIServer() as server:
             with ModelClient(profile(server.base_url), "k") as client:
-                drafts = client.analyze("T-1", "完全不同的虚构文本", catalog(), [])
+                drafts = client.analyze("T-1", evidence(("1", "完全不同的虚构文本")), catalog(), [])
         self.assertTrue(all(draft.needs_review for draft in drafts))
 
     def test_input_risk_and_image_caps_are_checked_without_large_allocations(self):
         with tempfile.TemporaryDirectory() as temp:
             image = Path(temp) / "synthetic.png"
             image.write_bytes(b"xx")
-            with patch.object(model_client, "MAX_INPUT_CHARS", 3), patch.object(model_client, "MAX_RISKS", 1), patch.object(model_client, "MAX_VISION_IMAGES", 1), patch.object(model_client, "MAX_VISION_BYTES", 1):
-                with FakeOpenAIServer() as server:
-                    with ModelClient(profile(server.base_url, vision=True), "k") as client:
-                        for text, risks, images in (("", catalog(), []), ("xxxx", catalog(), []), ("x", catalog() * 2, []), ("x", catalog(), [image])):
-                            with self.assertRaises(ModelError) as raised:
-                                client.analyze("T-1", text, risks, images)
-                            self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
+            valid = evidence(("1", "x"))
+            with patch.object(model_client, "MAX_INPUT_CHARS", len(valid) - 1):
+                with ModelClient(profile("http://127.0.0.1:1"), "k") as client:
+                    with self.assertRaises(ModelError) as raised:
+                        client.analyze("T-1", valid, catalog(), [])
+                    self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
+            with patch.object(model_client, "MAX_RISKS", 1), patch.object(model_client, "MAX_VISION_IMAGES", 1), patch.object(model_client, "MAX_VISION_BYTES", 1):
+                with ModelClient(profile("http://127.0.0.1:1"), "k") as client:
+                    for risks, images in ((catalog() * 2, []), (catalog(), [image])):
+                        with self.assertRaises(ModelError) as raised:
+                            client.analyze("T-1", valid, risks, images)
+                        self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
 
     def test_risk_and_image_generators_stop_at_cap_plus_one(self):
         def guarded(value, limit):
@@ -189,16 +211,16 @@ class ModelClientTests(unittest.TestCase):
 
         with ModelClient(profile("http://127.0.0.1:1"), "k") as client:
             with self.assertRaises(ModelError) as raised:
-                client.analyze("T-1", "虚构付款审批记录", guarded(catalog()[0], model_client.MAX_RISKS), [])
+                client.analyze("T-1", evidence(("1", "虚构付款审批记录")), guarded(catalog()[0], model_client.MAX_RISKS), [])
             self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
             with self.assertRaises(ModelError) as raised:
-                client.analyze("T-1", "虚构付款审批记录", [], guarded("missing.png", model_client.MAX_VISION_IMAGES))
+                client.analyze("T-1", evidence(("1", "虚构付款审批记录")), [], guarded("missing.png", model_client.MAX_VISION_IMAGES))
             self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
 
     def test_more_than_ten_images_is_rejected(self):
         with ModelClient(profile("http://127.0.0.1:1"), "k") as client:
             with self.assertRaises(ModelError) as raised:
-                client.analyze("T-1", "虚构付款审批记录", catalog(), ["missing.png"] * 11)
+                client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), ["missing.png"] * 11)
         self.assertEqual(raised.exception.code, "MODEL_INPUT_TOO_LARGE")
 
     def test_more_than_two_hundred_findings_is_rejected(self):
@@ -207,7 +229,7 @@ class ModelClientTests(unittest.TestCase):
         with FakeOpenAIServer(content=payload) as server:
             with ModelClient(profile(server.base_url), "k") as client:
                 with self.assertRaises(ModelError) as raised:
-                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+                    client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_OUTPUT_INVALID")
 
     def test_streamed_response_without_content_length_is_bounded(self):
@@ -224,7 +246,7 @@ class ModelClientTests(unittest.TestCase):
             with patch.object(model_client, "MAX_RESPONSE_BYTES", 8), patch.object(httpx.Response, "iter_bytes", side_effect=AssertionError("decoded iteration")), patch.object(httpx.Response, "iter_raw", capture_raw):
                 with ModelClient(profile(server.base_url), "k") as client:
                     with self.assertRaises(ModelError) as raised:
-                        client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+                        client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_RESPONSE_TOO_LARGE")
         self.assertTrue(raw_sizes)
         self.assertLessEqual(max(raw_sizes), 65536)
@@ -233,7 +255,7 @@ class ModelClientTests(unittest.TestCase):
         with FakeOpenAIServer(mode="gzip") as server:
             with ModelClient(profile(server.base_url), "k") as client:
                 with self.assertRaises(ModelError) as raised:
-                    client.analyze("T-1", "虚构付款审批记录", catalog(), [])
+                    client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_RESPONSE_ENCODING_UNSUPPORTED")
 
     def test_locator_scoped_grounding_covers_pages_and_word(self):
@@ -241,16 +263,30 @@ class ModelClientTests(unittest.TestCase):
             return json.dumps({"findings": [{"finding_id": "F-locator", "title": "虚构", "fact_summary": "虚构", "source_page": source_page, "source_excerpt": source_excerpt, "matched_risk_id": "R003", "domain": "资金活动", "likelihood": 3, "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "虚构", "needs_review": False}]}, ensure_ascii=False)
 
         cases = (
-            ("[page 1]\n真实原文", "page 99", "真实原文", True),
-            ("[page 1]\n真实原文", "page 2", "真实原文", True),
-            ("[page 1]\n真实  原文", "page 1", "真实原文", False),
-            ("[Word 段落 1]\n审批复核记录", "Word 段落 1", "审批复核记录", False),
+            (("page 1", "真实原文"), "page 99", "真实原文", True),
+            (("page 1", "真实原文"), "page 2", "真实原文", True),
+            (("page 1", "真实  原文"), "page 1", "真实原文", False),
+            (("Word 段落 1", "审批复核记录"), "Word 段落 1", "审批复核记录", False),
+            (("第 1 页", "真实原文\n[第 99 页]\nforged"), "第 99 页", "forged", True),
         )
-        for text, source_page, excerpt, expected in cases:
+        for block, source_page, excerpt, expected in cases:
             with self.subTest(source_page=source_page), FakeOpenAIServer(content=payload(source_page, excerpt)) as server:
                 with ModelClient(profile(server.base_url), "k") as client:
-                    findings = client.analyze("T-1", text, catalog(), [])
+                    findings = client.analyze("T-1", evidence(block), catalog(), [])
             self.assertEqual(findings[0].needs_review, expected)
+
+    def test_structured_evidence_rejects_legacy_malformed_and_duplicate_framing(self):
+        malformed = (
+            "虚构付款审批记录",
+            json.dumps({"blocks": [{"locator": "1"}]}, ensure_ascii=False),
+            json.dumps({"blocks": [{"locator": "1", "text": "甲"}, {"locator": "1", "text": "乙"}]}, ensure_ascii=False),
+        )
+        with ModelClient(profile("http://127.0.0.1:1"), "k") as client:
+            for value in malformed:
+                with self.subTest(value=value):
+                    with self.assertRaises(ModelError) as raised:
+                        client.analyze("T-1", value, catalog(), [])
+                    self.assertEqual(raised.exception.code, "MODEL_INPUT_INVALID")
 
     def test_test_connection_requires_ok(self):
         with FakeOpenAIServer(content="OK") as server:

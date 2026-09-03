@@ -22,6 +22,7 @@ MAX_INPUT_CHARS = 1_000_000
 MAX_RISKS = 200
 MAX_VISION_IMAGES = 10
 MAX_VISION_BYTES = 20 * 1024 * 1024
+MAX_EVIDENCE_BLOCKS = 200
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 
@@ -48,6 +49,7 @@ _SAFE_MESSAGES = {
     "MODEL_OUTPUT_INVALID": "模型返回内容不符合发现草案格式。",
     "MODEL_INPUT_TOO_LARGE": "分析输入超过安全限制。",
     "MODEL_RESPONSE_TOO_LARGE": "模型响应超过安全限制。",
+    "MODEL_INPUT_INVALID": "输入证据格式无效。",
 }
 
 
@@ -55,15 +57,47 @@ def _error(code: str) -> ModelError:
     return ModelError(code, _SAFE_MESSAGES[code])
 
 
-def _collect_bounded(values: Iterable[Any], limit: int) -> list[Any]:
+def _collect_bounded(values: Iterable[Any], limit: int, error_code: str = "MODEL_INPUT_TOO_LARGE") -> list[Any]:
     """Collect at most one item beyond a cap so unbounded iterables stay bounded."""
     try:
         collected = list(islice(values, limit + 1))
     except (TypeError, ValueError):
-        raise _error("MODEL_INPUT_TOO_LARGE") from None
+        raise _error(error_code) from None
     if len(collected) > limit:
-        raise _error("MODEL_INPUT_TOO_LARGE")
+        raise _error(error_code)
     return collected
+
+
+def _is_loopback_hostname(hostname: str) -> bool:
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return ((address.version == 4 and address in ipaddress.IPv4Network("127.0.0.0/8"))
+            or address == ipaddress.IPv6Address("::1"))
+
+
+def serialize_evidence_blocks(blocks: Iterable[Any]) -> str:
+    """Serialize extracted evidence into the canonical JSON framing for analysis."""
+    serialized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for block in _collect_bounded(blocks, MAX_EVIDENCE_BLOCKS, "MODEL_INPUT_INVALID"):
+        if isinstance(block, Mapping):
+            if set(block) != {"locator", "text"}:
+                raise _error("MODEL_INPUT_INVALID")
+            locator, text = block["locator"], block["text"]
+        else:
+            locator, text = getattr(block, "locator", None), getattr(block, "text", None)
+        if not isinstance(locator, str) or not locator.strip() or not isinstance(text, str) or not text.strip():
+            raise _error("MODEL_INPUT_INVALID")
+        locator, text = locator.strip(), text.strip()
+        if locator in seen:
+            raise _error("MODEL_INPUT_INVALID")
+        seen.add(locator)
+        serialized.append({"locator": locator, "text": text})
+    return json.dumps({"blocks": serialized}, ensure_ascii=False, separators=(",", ":"))
 
 
 def normalize_endpoint(base_url: str) -> str:
@@ -82,15 +116,7 @@ def normalize_endpoint(base_url: str) -> str:
             or parsed.path not in ("", "/v1")):
         raise _error("MODEL_CONNECTION_FAILED")
     if parsed.scheme == "http":
-        loopback = hostname.lower() == "localhost"
-        if not loopback:
-            try:
-                address = ipaddress.ip_address(hostname)
-                loopback = ((address.version == 4 and address in ipaddress.IPv4Network("127.0.0.0/8"))
-                            or address == ipaddress.IPv6Address("::1"))
-            except ValueError:
-                loopback = False
-        if not loopback:
+        if not _is_loopback_hostname(hostname):
             raise _error("MODEL_URL_INSECURE")
     return urlunparse((parsed.scheme, parsed.netloc, "/v1/chat/completions", "", "", ""))
 
@@ -112,17 +138,30 @@ def _content_json(content: Any) -> dict[str, Any]:
     return parsed
 
 
-def _locator_blocks(normalized_text: str) -> dict[str, str]:
-    """Index exact ``[locator]\ntext`` blocks for locator-scoped evidence checks."""
-    marker = re.compile(r"(?m)^\[([^\]\r\n]+)\]\r?\n")
-    matches = list(marker.finditer(normalized_text))
-    blocks: dict[str, str] = {}
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(normalized_text)
-        locator = match.group(1)
-        block = normalized_text[match.end():end]
-        blocks[locator] = f"{blocks[locator]}\n{block}" if locator in blocks else block
-    return blocks
+def _parse_evidence_blocks(normalized_text: str) -> dict[str, str]:
+    """Validate and index canonical structured evidence JSON."""
+    if not isinstance(normalized_text, str) or not normalized_text.strip():
+        raise _error("MODEL_INPUT_INVALID")
+    try:
+        payload = json.loads(normalized_text)
+    except (TypeError, json.JSONDecodeError):
+        raise _error("MODEL_INPUT_INVALID") from None
+    if not isinstance(payload, dict) or set(payload) != {"blocks"} or not isinstance(payload["blocks"], list):
+        raise _error("MODEL_INPUT_INVALID")
+    if len(payload["blocks"]) > MAX_EVIDENCE_BLOCKS:
+        raise _error("MODEL_INPUT_INVALID")
+    result: dict[str, str] = {}
+    for block in payload["blocks"]:
+        if not isinstance(block, Mapping) or set(block) != {"locator", "text"}:
+            raise _error("MODEL_INPUT_INVALID")
+        locator, text = block["locator"], block["text"]
+        if not isinstance(locator, str) or not locator.strip() or not isinstance(text, str) or not text.strip():
+            raise _error("MODEL_INPUT_INVALID")
+        locator, text = locator.strip(), text.strip()
+        if locator in result:
+            raise _error("MODEL_INPUT_INVALID")
+        result[locator] = text
+    return result
 
 
 def _known_risk_ids(risk_catalog: list[Any]) -> set[str]:
@@ -156,7 +195,11 @@ class ModelClient:
         self._api_key = api_key.strip()
         self.endpoint = normalize_endpoint(profile.base_url)
         # Keep standard TLS verification enabled by using httpx's secure default.
-        self._client = httpx.Client(timeout=httpx.Timeout(120, connect=10))
+        parsed = urlparse(profile.base_url)
+        client_options: dict[str, Any] = {"timeout": httpx.Timeout(120, connect=10)}
+        if parsed.scheme == "http" and parsed.hostname and _is_loopback_hostname(parsed.hostname):
+            client_options["trust_env"] = False
+        self._client = httpx.Client(**client_options)
 
     def __enter__(self) -> "ModelClient":
         return self
@@ -234,8 +277,9 @@ class ModelClient:
             raise _error("MODEL_OUTPUT_INVALID") from None
 
     def analyze(self, task_id: str, normalized_text: str, risk_catalog: Iterable[Mapping[str, Any]], vision_images: Iterable[str | Path]) -> list[FindingDraft]:
-        if not isinstance(normalized_text, str) or not normalized_text.strip() or len(normalized_text) > MAX_INPUT_CHARS:
+        if not isinstance(normalized_text, str) or len(normalized_text) > MAX_INPUT_CHARS:
             raise _error("MODEL_INPUT_TOO_LARGE")
+        locator_blocks = _parse_evidence_blocks(normalized_text)
         risks = _collect_bounded(risk_catalog, MAX_RISKS)
         prompt_risks = _as_prompt_catalog(risks)
         images = self._validate_images(vision_images)
@@ -270,7 +314,6 @@ class ModelClient:
         known_ids = _known_risk_ids(risks)
         seen: set[str] = set()
         findings: list[FindingDraft] = []
-        locator_blocks = _locator_blocks(normalized_text)
         try:
             for item in parsed["findings"]:
                 if not isinstance(item, Mapping) or set(item) != set(MODEL_FINDING_FIELDS):
