@@ -104,6 +104,7 @@ class DesktopBridge:
         self._task_locks: dict[str, threading.RLock] = {}
         self._task_locks_guard = threading.Lock()
         self._preview_slots = threading.BoundedSemaphore(1)
+        self._preview_before_attach: Callable[[], Any] | None = None
 
     def __getattr__(self, name: str) -> Any:
         # Window attachment is an application bootstrap hook, not a JS API.
@@ -277,24 +278,26 @@ class DesktopBridge:
 
     @_public
     def get_source_preview(self, task_id: Any, finding_id: Any, selection_token: Any = None) -> dict[str, Any]:
-        if not self._preview_slots.acquire(blocking=False):
-            raise _BridgeError("PREVIEW_BUSY", "来源预览正在生成，请稍后重试")
-        try:
-            return self._get_source_preview(task_id, finding_id, selection_token)
-        finally:
-            self._preview_slots.release()
+        with self._task_lock(task_id):
+            if not self._preview_slots.acquire(blocking=False):
+                raise _BridgeError("PREVIEW_BUSY", "来源预览正在生成，请稍后重试")
+            try:
+                return self._get_source_preview(task_id, finding_id, selection_token)
+            finally:
+                self._preview_slots.release()
 
     def _get_source_preview(self, task_id: Any, finding_id: Any, selection_token: Any = None) -> dict[str, Any]:
         task = self._store.get_task(task_id)
         source_info = self._task_sources.get(task_id)
         if task is None:
             raise _BridgeError("SOURCE_RESELECT_REQUIRED", "请重新选择原始报告以查看来源")
+        pending_attachment: tuple[Path, str] | None = None
         if source_info is None:
             if selection_token is None:
                 raise _BridgeError("SOURCE_RESELECT_REQUIRED", "请重新选择原始报告以查看来源")
             source = self._selection(selection_token, "report")
             source_info = (source, str(selection_token))
-            self._task_sources[task_id] = source_info
+            pending_attachment = source_info
         finding = self._get_finding(task_id, finding_id)
         source, _ = source_info
         if not source.is_file():
@@ -304,7 +307,11 @@ class DesktopBridge:
                 snapshot = Path(directory) / f"source{source.suffix.lower()}"
                 if _snapshot_preview_source(source, snapshot) != task.file_hash:
                     raise _BridgeError("SOURCE_HASH_CHANGED", "原始报告已变更，请重新选择")
+                if pending_attachment is not None and self._preview_before_attach is not None:
+                    self._preview_before_attach()
                 if source.suffix.lower() == ".docx":
+                    if pending_attachment is not None:
+                        self._task_sources[task_id] = pending_attachment
                     return {"kind": "text", "source_page": finding.source_page, "source_excerpt": finding.source_excerpt}
                 page = _PAGE.fullmatch(finding.source_page)
                 if page is None:
@@ -314,6 +321,8 @@ class DesktopBridge:
                     raise ExtractionError("PDF_RENDER_FAILED", "PDF页面渲染失败")
                 if len(data) > MAX_PREVIEW_PNG_BYTES:
                     raise _BridgeError("PREVIEW_TOO_LARGE", "来源预览超过安全大小限制")
+                if pending_attachment is not None:
+                    self._task_sources[task_id] = pending_attachment
                 return {"kind": "pdf", "source_page": finding.source_page,
                         "image_data_url": "data:image/png;base64," + base64.b64encode(data).decode("ascii")}
         except _BridgeError:

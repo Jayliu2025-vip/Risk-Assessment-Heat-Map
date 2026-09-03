@@ -255,6 +255,35 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(mismatch["code"], "SOURCE_HASH_CHANGED")
         self.assertNotIn(str(wrong), str(mismatch))
 
+    def test_preview_reattachment_is_serialized_with_cleanup(self):
+        self.seed_task()
+        restarted = type(self.bridge)(
+            store=self.store, pipeline=Pipeline(self.store), credential_store=CredentialMemory(),
+            model_client_factory=Client, workbook_writer=self.writer,
+            risk_catalog=[{"risk_id": "R001", "name": "合成风险"}],
+            pdf_preview_renderer=lambda path, page: b"png-bytes",
+        )
+        restarted.attach_window(self.window)
+        self.window.selected = [str(self.report)]
+        token = restarted.choose_report("report")["selection_token"]
+        entered, release = threading.Event(), threading.Event()
+        restarted._preview_before_attach = lambda: (entered.set(), release.wait(2))
+        preview_result, cleanup_result = [], []
+        preview_thread = threading.Thread(target=lambda: preview_result.append(restarted.get_source_preview("T-1", "F-1", token)))
+        preview_thread.start()
+        self.assertTrue(entered.wait(1))
+        cleanup_thread = threading.Thread(target=lambda: cleanup_result.append(restarted.cleanup_task("T-1")))
+        cleanup_thread.start()
+        release.set()
+        preview_thread.join(2); cleanup_thread.join(2)
+        self.assertFalse(preview_thread.is_alive())
+        self.assertFalse(cleanup_thread.is_alive())
+        self.assertTrue(preview_result[0]["ok"])
+        self.assertTrue(cleanup_result[0]["ok"])
+        self.assertNotIn("T-1", restarted._task_sources)
+        self.assertNotIn(token, restarted._selections)
+        self.assertEqual(restarted.get_source_preview("T-1", "F-1")["code"], "SOURCE_RESELECT_REQUIRED")
+
     def test_human_save_merge_and_split_validate_before_atomic_write(self):
         self.seed_task()
         self.store.save_findings([finding("T-1", "F-2")])
