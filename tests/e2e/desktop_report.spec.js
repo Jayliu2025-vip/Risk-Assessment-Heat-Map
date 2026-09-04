@@ -38,9 +38,11 @@ test.describe('synthetic desktop audit report workflow', () => {
     await page.getByRole('button', { name:'选择报告' }).click();
     await page.getByRole('button', { name:'选择正式工作簿' }).click();
     await expect.poll(() => page.evaluate(() => window.__desktopWorkbookCalls())).toBe(1);
+    await expect(page.locator('#report-workbook-name')).toContainText('已选择');
     await page.getByLabel('评估期间').fill('2026H2');
     await page.locator('#report-step-upload details summary').click();
     await page.getByRole('button', { name:'测试连接' }).click();
+    await expect(page.locator('#report-status')).toContainText('模型连接已验证');
     await page.getByRole('button', { name:'开始本地提取' }).dblclick();
     await expect.poll(() => page.evaluate(() => window.__desktopStartCalls())).toBe(1);
     await expect(page.locator('#report-step-review')).toBeVisible({ timeout: 5000 });
