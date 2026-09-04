@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.venv-desktop/
+build/
+dist/
+installer-output/
+packaging/cache/
 .worktrees/
 
 # 编辑器 / 工具
@@ -13,6 +18,8 @@ Thumbs.db
 
 # 本地验收 / 外部工具运行产物
 .playwright-cli/
+/node_modules/
+/test-results/
 /logs/
 /output/playwright/
 /tmp/

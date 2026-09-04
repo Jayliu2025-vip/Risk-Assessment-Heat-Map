@@ -80,7 +80,7 @@ Official references checked while writing this plan:
 - Create: `THIRD_PARTY_NOTICES.md`
 - Create: `tests/test_desktop_dependency_contract.py`
 
-- [ ] **Step 1: Write the failing dependency contract test**
+- [x] **Step 1: Write the failing dependency contract test**
 
 ```python
 # tests/test_desktop_dependency_contract.py
@@ -110,12 +110,12 @@ class DesktopDependencyContractTests(unittest.TestCase):
             self.assertIn(name, text)
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `python -m unittest tests.test_desktop_dependency_contract -v`  
 Expected: `FileNotFoundError` for `requirements-desktop.txt`.
 
-- [ ] **Step 3: Create pinned dependency files**
+- [x] **Step 3: Create pinned dependency files**
 
 ```text
 # requirements-desktop.txt
@@ -140,7 +140,7 @@ reportlab==5.0.1
 
 Create `THIRD_PARTY_NOTICES.md` with one row per direct dependency: package, pinned version, license, homepage, whether binary/model data is bundled, and required redistributed license path. Explicitly record pypdfium2/PDFium, RapidOCR models, ONNX Runtime and WebView2 Runtime.
 
-- [ ] **Step 4: Create an isolated desktop environment and install it**
+- [x] **Step 4: Create an isolated desktop environment and install it**
 
 Run:
 
@@ -153,7 +153,7 @@ py -3.13 -m venv .venv-desktop
 
 Expected: dependency installation exits 0 and `rapidocr check` prints `Success! rapidocr is installed correctly!`.
 
-- [ ] **Step 5: Verify GREEN and preserve the baseline**
+- [x] **Step 5: Verify GREEN and preserve the baseline**
 
 Run:
 
@@ -164,7 +164,7 @@ Run:
 
 Expected: dependency contract passes and the existing 41-test baseline remains green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add requirements-desktop.txt requirements-build.txt THIRD_PARTY_NOTICES.md tests/test_desktop_dependency_contract.py
@@ -186,7 +186,7 @@ The current web/manual include likelihood plus all eight impact anchors, while `
 - Modify: `tests/test_release_consistency.py`
 - Regenerate: `audit_risk_register.xlsx`
 
-- [ ] **Step 1: Write the failing rubric parity tests**
+- [x] **Step 1: Write the failing rubric parity tests**
 
 ```python
 # tests/test_scoring_anchor_parity.py
@@ -216,12 +216,12 @@ class ScoringAnchorParityTests(unittest.TestCase):
         self.assertNotIn("const ANCHORS = [", web)
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_scoring_anchor_parity -v`  
 Expected: missing `data/scoring_anchors.json` and assertions against the old inline `ANCHORS` block.
 
-- [ ] **Step 3: Create the canonical rubric and loader**
+- [x] **Step 3: Create the canonical rubric and loader**
 
 Create `data/scoring_anchors.json` as the following complete nine-group structure, using the current web wording without editorial changes:
 
@@ -310,7 +310,7 @@ def load_scoring_anchors(path=None):
     return groups
 ```
 
-- [ ] **Step 4: Make Excel and web consume the canonical data**
+- [x] **Step 4: Make Excel and web consume the canonical data**
 
 Change `build_anchor_sheet()` to iterate `load_scoring_anchors()` instead of its local `blocks` literal. Generate `web/scoring_anchors.js` from the JSON in `tools/sample_data.py` using:
 
@@ -322,7 +322,7 @@ anchors_js = "const SCORING_ANCHORS=" + json.dumps(
 
 Load `scoring_anchors.js` before the inline web script and render `SCORING_ANCHORS`. Add the generated file to the release-parity test so JSON and JavaScript cannot drift.
 
-- [ ] **Step 5: Regenerate synthetic artifacts and verify GREEN**
+- [x] **Step 5: Regenerate synthetic artifacts and verify GREEN**
 
 Run:
 
@@ -335,7 +335,7 @@ Run:
 
 Expected: nine complete anchor groups in JSON, web and workbook; all tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add data/scoring_anchors.json web/scoring_anchors.js web/risk_heatmap.html tools/scoring_anchors.py tools/sample_data.py tools/build_excel.py tests/test_scoring_anchor_parity.py tests/test_release_consistency.py audit_risk_register.xlsx
@@ -349,7 +349,7 @@ git commit -m "refactor: centralize the complete scoring rubric"
 - Create: `desktop/models.py`
 - Create: `tests/test_desktop_models.py`
 
-- [ ] **Step 1: Write failing model-validation tests**
+- [x] **Step 1: Write failing model-validation tests**
 
 ```python
 # tests/test_desktop_models.py
@@ -389,12 +389,12 @@ class FindingDraftTests(unittest.TestCase):
             FindingDraft.from_model("T001", payload, {"R003"})
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_desktop_models -v`  
 Expected: `ModuleNotFoundError: No module named 'desktop'`.
 
-- [ ] **Step 3: Implement exact dataclasses and validation**
+- [x] **Step 3: Implement exact dataclasses and validation**
 
 `desktop/models.py` must define:
 
@@ -492,7 +492,7 @@ class FindingDraft:
 
 Also define `ModelProfile(name, base_url, model, supports_vision)`, `ConfirmedControl(description, score, key)` and `RiskDecision(action, finding_ids, risk_id, name, domain, description, owner_dept, period, likelihood, impact_scores, rationale, controls)` with the same domain/score validation. `action` must be one of `merge`, `create`, `exclude`.
 
-- [ ] **Step 4: Verify GREEN and run the suite**
+- [x] **Step 4: Verify GREEN and run the suite**
 
 Run:
 
@@ -503,7 +503,7 @@ Run:
 
 Expected: all model tests and the complete suite pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add desktop/__init__.py desktop/models.py tests/test_desktop_models.py
@@ -520,7 +520,7 @@ git commit -m "feat: define report assessment domain contracts"
 - Create: `tests/test_desktop_storage.py`
 - Create: `tests/test_desktop_security.py`
 
-- [ ] **Step 1: Write failing persistence and secret-isolation tests**
+- [x] **Step 1: Write failing persistence and secret-isolation tests**
 
 ```python
 # tests/test_desktop_storage.py
@@ -583,18 +583,18 @@ class DesktopSecurityTests(unittest.TestCase):
             CredentialStore(LinuxBackend()).assert_windows_backend()
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_desktop_storage tests.test_desktop_security -v`  
 Expected: imports fail because the four desktop modules do not exist.
 
-- [ ] **Step 3: Implement paths and SQLite schema**
+- [x] **Step 3: Implement paths and SQLite schema**
 
 Use `%LOCALAPPDATA%\RiskAssessmentHeatMap` for mutable state and `sys._MEIPASS` only for packaged read-only assets. Create SQLite tables with exactly the agreed task/finding fields plus a `model_profiles` table containing `name`, `base_url`, `model`, and `supports_vision`. Store `impact_scores` as UTF-8 JSON. Do not add an API-key column, raw-text column, full-path column, prompt column, or model-response column.
 
 `DesktopStore` must provide `save_task`, `get_task`, `save_findings`, `list_findings`, `update_finding`, `set_review_status`, `save_model_profile`, `list_model_profiles`, and `table_columns`. Every write uses a transaction and every returned finding is revalidated through `FindingDraft`.
 
-- [ ] **Step 4: Implement credentials and temporary files**
+- [x] **Step 4: Implement credentials and temporary files**
 
 ```python
 # desktop/credentials.py
@@ -630,11 +630,11 @@ class CredentialStore:
 
 `TaskTempFiles.create(task_id)` must reject task IDs outside `[A-Za-z0-9_-]+`, resolve the final path, verify it remains beneath the configured temp root, and create it. `cleanup(task_id)` must perform the same containment check before `shutil.rmtree` and return a list containing the path when deletion fails.
 
-- [ ] **Step 5: Add the no-sensitive-persistence assertion**
+- [x] **Step 5: Add the no-sensitive-persistence assertion**
 
 Extend `tests/test_desktop_security.py` to save a task, profile, and finding, then read raw SQLite bytes and assert that `sk-synthetic-secret`, `虚构报告完整正文`, and a synthetic absolute report path are absent.
 
-- [ ] **Step 6: Verify GREEN and commit**
+- [x] **Step 6: Verify GREEN and commit**
 
 Run:
 
@@ -658,7 +658,7 @@ Expected: all tests pass; the commit contains no fixture report or secret.
 - Create: `tests/test_report_extraction.py`
 - Add generated synthetic fixtures under: `tests/fixtures/generated/`
 
-- [ ] **Step 1: Generate deterministic fictional fixtures**
+- [x] **Step 1: Generate deterministic fictional fixtures**
 
 `build_audit_report_fixtures.py` must create:
 
@@ -669,7 +669,7 @@ Expected: all tests pass; the commit contains no fixture report or secret.
 
 Use ReportLab only in the fixture builder. Stamp every page with `虚构测试资料 / SYNTHETIC TEST DATA`. Run the builder once and commit the generated fixtures so extraction tests do not depend on ReportLab at runtime.
 
-- [ ] **Step 2: Write failing extraction-routing tests**
+- [x] **Step 2: Write failing extraction-routing tests**
 
 ```python
 # tests/test_report_extraction.py
@@ -711,12 +711,12 @@ class ReportExtractionTests(unittest.TestCase):
             self.assertTrue(Path(block.image_path).exists())
 ```
 
-- [ ] **Step 3: Run and verify RED**
+- [x] **Step 3: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_report_extraction -v`  
 Expected: `ModuleNotFoundError` for `desktop.extraction`.
 
-- [ ] **Step 4: Implement text-quality and OCR adapters**
+- [x] **Step 4: Implement text-quality and OCR adapters**
 
 ```python
 # desktop/ocr.py
@@ -745,7 +745,7 @@ def text_is_usable(text):
 
 For PDF, use `pypdfium2.PdfDocument`, `page.get_textpage().get_text_bounded()`, and `page.render(scale=2.0).to_pil()` for pages needing OCR. For DOCX, walk body XML children so paragraphs and tables retain order; use `python-docx` relationships to write embedded images to the task temp directory and pass image-only blocks to OCR. Reject `.doc`, encrypted/corrupt PDF, and unsupported extensions with stable Chinese error codes/messages.
 
-- [ ] **Step 5: Run unit tests and a real local OCR smoke**
+- [x] **Step 5: Run unit tests and a real local OCR smoke**
 
 Run:
 
@@ -756,12 +756,12 @@ Run:
 
 Expected: unit tests pass and smoke prints `OCR_SMOKE_OK`.
 
-- [ ] **Step 6: Verify no strong-copyleft PDF package entered the environment**
+- [x] **Step 6: Verify no strong-copyleft PDF package entered the environment**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m pip freeze | Select-String -Pattern 'PyMuPDF|fitz'`  
 Expected: no output.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add desktop/ocr.py desktop/extraction.py tests/fixtures/build_audit_report_fixtures.py tests/fixtures/generated tests/test_report_extraction.py
@@ -777,11 +777,11 @@ git commit -m "feat: extract report text with OCR and vision fallback routing"
 - Create: `tests/fakes/openai_server.py`
 - Create: `tests/test_model_client.py`
 
-- [ ] **Step 1: Write the local fake server**
+- [x] **Step 1: Write the local fake server**
 
 Implement `FakeOpenAIServer` as a context manager around `ThreadingHTTPServer`. It must expose `POST /v1/chat/completions`, record request JSON in memory, and support modes `success`, `invalid_json`, `rate_limit`, and `timeout`. The `success` response returns three fictional findings under `choices[0].message.content` as a JSON string.
 
-- [ ] **Step 2: Write failing model-client tests**
+- [x] **Step 2: Write failing model-client tests**
 
 ```python
 # tests/test_model_client.py
@@ -816,12 +816,12 @@ class ModelClientTests(unittest.TestCase):
                     ModelClient(profile, "sk-synthetic").analyze("T1", "text", [], [])
 ```
 
-- [ ] **Step 3: Run and verify RED**
+- [x] **Step 3: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_model_client -v`  
 Expected: imports fail because `desktop.model_client` and the fake server do not exist.
 
-- [ ] **Step 4: Implement the prompt contract**
+- [x] **Step 4: Implement the prompt contract**
 
 `desktop/prompts.py` must serialize:
 
@@ -834,7 +834,7 @@ Expected: imports fail because `desktop.model_client` and the fake server do not
 
 The system prompt must request one JSON object shaped as `{"findings": [...]}` and explicitly prohibit Markdown fences and commentary.
 
-- [ ] **Step 5: Implement HTTP and response parsing**
+- [x] **Step 5: Implement HTTP and response parsing**
 
 `ModelClient` must normalize the base URL, call `<base_url>/chat/completions` when the configured URL already ends in `/v1`, otherwise call `<base_url>/v1/chat/completions`, and use `httpx.Client(timeout=httpx.Timeout(120, connect=10))`. Put the API key only in the Authorization header. Never log request bodies or response bodies.
 
@@ -842,7 +842,7 @@ When `vision_images` is non-empty and `supports_vision` is true, add only those 
 
 Map failures to stable codes: `MODEL_AUTH_FAILED`, `MODEL_RATE_LIMIT`, `MODEL_TIMEOUT`, `MODEL_CONNECTION_FAILED`, `MODEL_JSON_INVALID`, and `MODEL_OUTPUT_INVALID`.
 
-- [ ] **Step 6: Verify GREEN and commit**
+- [x] **Step 6: Verify GREEN and commit**
 
 Run:
 
@@ -861,7 +861,7 @@ Expected: all tests pass without external network access.
 - Create: `desktop/pipeline.py`
 - Create: `tests/test_analysis_pipeline.py`
 
-- [ ] **Step 1: Write failing pipeline state-machine tests**
+- [x] **Step 1: Write failing pipeline state-machine tests**
 
 Test these exact transitions:
 
@@ -886,12 +886,12 @@ def test_retry_model_stage_does_not_repeat_extraction(self):
 
 Use injected fake extractor/model/store/temp objects; the test is for orchestration, not OCR or HTTP.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_analysis_pipeline -v`  
 Expected: `ModuleNotFoundError: desktop.pipeline`.
 
-- [ ] **Step 3: Implement the pipeline**
+- [x] **Step 3: Implement the pipeline**
 
 `AnalysisPipeline.start(path, profile_name, known_risks)` must:
 
@@ -910,11 +910,11 @@ Keep retry material only in process memory. After application restart, retry req
 
 The public API is `start`, `wait`, `events`, `retry`, `cancel`, and `review_findings`. `review_findings(task_id, edits)` validates edits through `FindingDraft`, then delegates status changes to `DesktopStore.set_review_status`.
 
-- [ ] **Step 4: Add cancellation and failure cleanup tests**
+- [x] **Step 4: Add cancellation and failure cleanup tests**
 
 Add tests proving cancellation/failure leaves task status `失败`, does not persist normalized text, does not delete the user's source file, and reports any temp cleanup residue path.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run:
 
@@ -934,7 +934,7 @@ git commit -m "feat: orchestrate resumable report analysis"
 - Create: `tests/test_workbook_writer.py`
 - Modify: `tools/export_from_excel.py:74-145`
 
-- [ ] **Step 1: Write failing workbook safety tests**
+- [x] **Step 1: Write failing workbook safety tests**
 
 ```python
 # tests/test_workbook_writer.py
@@ -968,12 +968,12 @@ class WorkbookWriterTests(unittest.TestCase):
 
 The fixture decisions must include one create, one merge and one exclude action; controls exist only on the accepted create/merge decisions.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_workbook_writer -v`  
 Expected: `ModuleNotFoundError: desktop.workbook_writer`.
 
-- [ ] **Step 3: Refactor the existing exporter behind a callable API**
+- [x] **Step 3: Refactor the existing exporter behind a callable API**
 
 Extract the body of `tools/export_from_excel.py:74-145` into:
 
@@ -984,7 +984,7 @@ def export_workbook(xlsx_path, out_dir=OUT_DIR):
 
 Keep CLI behavior unchanged by making `main()` parse arguments and call `export_workbook`. Add a regression test comparing the current exported synthetic CSV/config content before and after the refactor.
 
-- [ ] **Step 4: Implement preview and versioned write**
+- [x] **Step 4: Implement preview and versioned write**
 
 `preview_changes()` returns only user-facing counts and row dictionaries: `new_risks`, `updated_risks`, `new_controls`, `excluded_count`, and `warnings`.
 
@@ -1001,11 +1001,11 @@ Define `WorkbookWriteResult(workbook_path, export_dir, periods, assessed_risks)`
 9. Save the copy, reopen it with `data_only=False`, and validate the written literal fields.
 10. Call `export_workbook()` into a sibling `data_export` directory and return its paths.
 
-- [ ] **Step 5: Verify formula and score parity**
+- [x] **Step 5: Verify formula and score parity**
 
 Load the exported copy through `tools.common.load_dataset`, run `assess_all`, and assert the create/merge results equal the preview scores. Keep the original workbook SHA-256 assertion.
 
-- [ ] **Step 6: Verify GREEN and commit**
+- [x] **Step 6: Verify GREEN and commit**
 
 Run:
 
@@ -1024,7 +1024,7 @@ git commit -m "feat: write confirmed findings to a versioned risk workbook"
 - Create: `tests/test_desktop_bridge.py`
 - Modify: `.gitignore`
 
-- [ ] **Step 1: Write failing bridge contract tests**
+- [x] **Step 1: Write failing bridge contract tests**
 
 Create injected fake pipeline/store/credential/writer objects and test that `DesktopBridge` exposes only:
 
@@ -1047,18 +1047,18 @@ cleanup_task
 
 Test that returned errors have `{"ok": false, "code": "...", "message": "..."}` and never contain API keys, report content, Python tracebacks or absolute paths outside an explicitly selected output path.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_desktop_bridge -v`  
 Expected: import failure for `desktop.bridge`.
 
-- [ ] **Step 3: Implement the bridge**
+- [x] **Step 3: Implement the bridge**
 
 Every public bridge method returns a JSON-serializable dictionary. `choose_report` uses `webview.windows[0].create_file_dialog(OPEN_DIALOG, allow_multiple=False, file_types=("审计报告 (*.pdf;*.docx)",))`. Store the selected absolute path only in an in-memory dictionary keyed by task ID; do not send it to JavaScript or SQLite.
 
 `get_source_preview(task_id, locator)` uses the in-memory selected path to render one PDF page on demand as a data URL, or returns the corresponding DOCX text block. It never returns the source path and discards the rendered image after encoding. `save_model_profile` writes non-secret fields to SQLite and passes the API key directly to `CredentialStore`. `test_model_profile` sends a minimal `只返回 OK` request through the actual configured chat endpoint and returns the hostname, not the full Authorization header or request.
 
-- [ ] **Step 4: Implement the desktop entry point**
+- [x] **Step 4: Implement the desktop entry point**
 
 ```python
 # desktop/app.py
@@ -1090,7 +1090,7 @@ if __name__ == "__main__":
 
 Add `.venv-desktop/`, `build/`, `dist/`, `installer-output/`, and local desktop state directories to `.gitignore`.
 
-- [ ] **Step 5: Verify bridge tests and manual shell start**
+- [x] **Step 5: Verify bridge tests and manual shell start**
 
 Run:
 
@@ -1101,7 +1101,7 @@ Run:
 
 Expected: tests pass; a WebView2 window opens the existing heatmap page. Close it manually and confirm the process exits without a terminal traceback.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add desktop/bridge.py desktop/app.py tests/test_desktop_bridge.py .gitignore
@@ -1118,7 +1118,7 @@ git commit -m "feat: host the existing heatmap in a Windows desktop shell"
 - Create: `tests/e2e/desktop_report.spec.js`
 - Create: `package.json`
 
-- [ ] **Step 1: Write failing static web-contract tests**
+- [x] **Step 1: Write failing static web-contract tests**
 
 Assert that the HTML contains desktop-only navigation and panels with IDs:
 
@@ -1135,7 +1135,7 @@ report-change-preview
 
 Assert that browser mode hides `desktop-report-nav`, and `desktop_report.js` waits for `pywebviewready` before using `window.pywebview.api`.
 
-- [ ] **Step 2: Write the failing Playwright workflow**
+- [x] **Step 2: Write the failing Playwright workflow**
 
 In `tests/e2e/desktop_report.spec.js`, inject a fake `window.pywebview.api` before page load. The fake must return three fictional findings. Drive:
 
@@ -1157,7 +1157,7 @@ open report tab → choose file → start → poll to 待复核
 
 Assert the review list has three rows, the preview has one updated/new risk and one excluded finding, and the existing priority table contains the confirmed risk.
 
-- [ ] **Step 3: Run and verify RED**
+- [x] **Step 3: Run and verify RED**
 
 Run:
 
@@ -1170,13 +1170,13 @@ npx playwright test tests/e2e/desktop_report.spec.js
 
 Expected: static selectors are missing and Playwright fails to locate the report navigation.
 
-- [ ] **Step 4: Add desktop-only mount points and styles**
+- [x] **Step 4: Add desktop-only mount points and styles**
 
 Add one “审计报告评估” navigation button and four `<section>` elements before the existing dashboard panels. Keep them hidden unless `window.pywebview` becomes available. Use the existing CSS variables, buttons, tables and typography; do not introduce a frontend framework.
 
 The review view uses two columns: source page/excerpt on the left, one compact editable finding form on the right. Display only the agreed fields. Unit, amount, OCR confidence, model confidence and per-dimension evidence must not appear as separate inputs.
 
-- [ ] **Step 5: Implement the wizard state and risk import hook**
+- [x] **Step 5: Implement the wizard state and risk import hook**
 
 `desktop_report.js` must:
 
@@ -1192,7 +1192,7 @@ The review view uses two columns: source page/excerpt on the left, one compact e
 
 Add `window.RAHMDesktop.loadPeriodData` to the existing inline script. It validates the same CSV-shaped risk/control fields, replaces only the returned period in `state.data`, persists, and calls `renderAll()`. It must not run automatically in browser mode.
 
-- [ ] **Step 6: Verify GREEN, browser compatibility, and commit**
+- [x] **Step 6: Verify GREEN, browser compatibility, and commit**
 
 Run:
 
@@ -1215,7 +1215,7 @@ Expected: desktop workflow passes; opening `web/risk_heatmap.html` directly stil
 - Create: `tools/run_synthetic_desktop_acceptance.py`
 - Create: `docs/desktop-acceptance.md`
 
-- [ ] **Step 1: Write the failing vertical-slice test**
+- [x] **Step 1: Write the failing vertical-slice test**
 
 The test must use a temporary app-data directory, a copied synthetic workbook, `scan_report.pdf`, and `FakeOpenAIServer`. It must perform the actual extractor → OCR → model client → finding store → one modify/one merge/one exclude → workbook writer flow.
 
@@ -1232,12 +1232,12 @@ self.assertNotIn(b"sk-synthetic", sqlite_bytes)
 self.assertNotIn("虚构报告完整正文".encode("utf-8"), sqlite_bytes)
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_desktop_vertical_slice -v`  
 Expected: failure at the first missing integration seam or incorrect result count.
 
-- [ ] **Step 3: Implement only the integration seams exposed by RED**
+- [x] **Step 3: Implement only the integration seams exposed by RED**
 
 Do not add a second scoring formula. Call the already-defined `AnalysisPipeline.review_findings(task_id, edits)`, `DesktopStore.set_review_status(task_id, finding_id, status)`, and `write_versioned_workbook(source, decisions, timestamp)` APIs from the acceptance script. The acceptance script must print a machine-readable final line:
 
@@ -1245,11 +1245,11 @@ Do not add a second scoring formula. Call the already-defined `AnalysisPipeline.
 DESKTOP_ACCEPTANCE_OK findings=3 accepted=2 excluded=1 period=2026H2 source_unchanged=true temp_clean=true
 ```
 
-- [ ] **Step 4: Add a network guard**
+- [x] **Step 4: Add a network guard**
 
 In the acceptance script, reject any model base URL whose hostname is not `127.0.0.1` or `localhost`. Run it with Windows Firewall/network disconnected once before release and record the command/result in `docs/desktop-acceptance.md`.
 
-- [ ] **Step 5: Verify GREEN and commit**
+- [x] **Step 5: Verify GREEN and commit**
 
 Run:
 
@@ -1272,7 +1272,7 @@ git commit -m "test: prove the synthetic report-to-risk desktop workflow"
 - Create: `tools/verify_desktop_package.ps1`
 - Create: `tests/test_packaging_contract.py`
 
-- [ ] **Step 1: Write failing packaging-contract tests**
+- [x] **Step 1: Write failing packaging-contract tests**
 
 Assert that the PyInstaller spec includes:
 
@@ -1287,18 +1287,18 @@ Assert that the PyInstaller spec includes:
 
 Assert the Inno file installs the onedir bundle per-user, creates Start Menu/uninstall entries, checks or installs WebView2 Runtime, and never requests administrator privileges for normal app execution.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_packaging_contract -v`  
 Expected: packaging files are missing.
 
-- [ ] **Step 3: Implement the PyInstaller spec and license export**
+- [x] **Step 3: Implement the PyInstaller spec and license export**
 
 Use `COLLECT`/onedir with `desktop/app.py` as entry point. Resolve package data using `PyInstaller.utils.hooks.collect_data_files` for `rapidocr`, `pypdfium2`, and `keyring`. Exclude `PyQt5`, `PyQt6`, `PySide2`, `PySide6`, `gtk`, `cefpython3` so pywebview does not bundle unused renderers.
 
 `export_third_party_licenses.py` copies each installed distribution's `LICENSE*`, `COPYING*`, `NOTICE*`, and pypdfium2 `BUILD_LICENSES` into `build/licenses/<distribution>/`; it exits non-zero if pypdfium2/PDFium or RapidOCR license material is absent.
 
-- [ ] **Step 4: Implement repeatable PowerShell build**
+- [x] **Step 4: Implement repeatable PowerShell build**
 
 `tools/build_desktop.ps1` must:
 
@@ -1314,7 +1314,7 @@ Use `COLLECT`/onedir with `desktop/app.py` as entry point. Resolve package data 
 
 Do not use `rm -rf`, `git clean`, broad globs outside those verified build paths, or unresolved `$HOME`-style variables.
 
-- [ ] **Step 5: Implement packaged smoke mode**
+- [x] **Step 5: Implement packaged smoke mode**
 
 Add `--synthetic-smoke` to `desktop/app.py`. In this mode it runs the local fake-model vertical slice against a temporary app-data directory and exits 0 after printing `PACKAGED_DESKTOP_SMOKE_OK`; it must not open a window or use external network.
 
@@ -1327,7 +1327,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Packaged smoke failed' }
 
 Then it installs the Inno output silently into a temporary per-user directory, executes the installed `--synthetic-smoke`, uninstalls it, and verifies no application process remains.
 
-- [ ] **Step 6: Build and verify GREEN**
+- [x] **Step 6: Build and verify GREEN**
 
 Run:
 
@@ -1339,7 +1339,7 @@ powershell -ExecutionPolicy Bypass -File tools\verify_desktop_package.ps1
 
 Expected: `PACKAGED_DESKTOP_SMOKE_OK`, installer smoke exit 0, installer SHA-256 printed, and no Python installation required by the installed application.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add packaging tools/export_third_party_licenses.py tools/build_desktop.ps1 tools/verify_desktop_package.ps1 desktop/app.py tests/test_packaging_contract.py THIRD_PARTY_NOTICES.md
@@ -1357,7 +1357,7 @@ Do not commit `build/`, `dist/`, or installer binaries.
 - Modify: `docs/superpowers/specs/2026-09-02-audit-report-risk-assessment-desktop-design.md`
 - Modify: this plan file to check completed steps and record evidence
 
-- [ ] **Step 1: Write the failing documentation contract test**
+- [x] **Step 1: Write the failing documentation contract test**
 
 Add `tests/test_desktop_documentation.py` asserting README/manual state:
 
@@ -1371,16 +1371,16 @@ Add `tests/test_desktop_documentation.py` asserting README/manual state:
 - versioned workbook output and original preservation;
 - synthetic/non-production sample labels.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\.venv-desktop\Scripts\python.exe -m unittest tests.test_desktop_documentation -v`  
 Expected: desktop instructions are absent from README/manual.
 
-- [ ] **Step 3: Update the docs without overstating model accuracy**
+- [x] **Step 3: Update the docs without overstating model accuracy**
 
 Document installation, first-run model setup, the four-step workflow, retry/error messages, privacy boundary, local state location, how to delete tasks, how to promote the versioned workbook to formal truth, and how to run the synthetic acceptance. State explicitly that model outputs are recommendations and historical findings do not prove current residual risk without current-control confirmation.
 
-- [ ] **Step 4: Run the full verification matrix fresh**
+- [x] **Step 4: Run the full verification matrix fresh**
 
 Run:
 
@@ -1403,16 +1403,24 @@ Expected:
 - `PACKAGED_DESKTOP_SMOKE_OK` for both onedir and installed app;
 - only intended documentation/evidence files remain uncommitted before the final commit.
 
-- [ ] **Step 5: Perform requirement-by-requirement evidence review**
+- [x] **Step 5: Perform requirement-by-requirement evidence review**
 
 Check every item in design section 11 against a test, command output or installed-app observation. Record exact commands, counts, installer path/hash, Windows version, WebView2 version and any known limitation in `docs/desktop-acceptance.md`. If any item lacks evidence, leave the design status as implementation incomplete and do not claim release completion.
 
-- [ ] **Step 6: Commit final documentation and evidence**
+- [x] **Step 6: Commit final documentation and evidence**
 
 ```powershell
 git add README.md docs/使用手册.md docs/desktop-acceptance.md docs/superpowers/specs/2026-09-02-audit-report-risk-assessment-desktop-design.md docs/superpowers/plans/2026-09-02-audit-report-risk-assessment-desktop.md tests/test_desktop_documentation.py
 git commit -m "docs: publish the Windows desktop report assessment workflow"
 ```
+
+### Execution evidence recorded 2026-09-03
+
+- Current-host matrix: 236 Python tests, 3 Playwright tests, process-level offline synthetic vertical slice, full PyInstaller/Inno rebuild, onedir smoke, silent install, installed smoke and silent uninstall all passed.
+- Final installer: `installer-output/RiskAssessmentHeatMap-Setup.exe`, SHA-256 `23BFD812E91570E3D3BBD83799432A2779AFB70B68DE458F04BB75D9EC0959C5`.
+- Environment: Windows 11 x64 build 26200; WebView2 `152.0.4191.53`; Python 3.13.14 x64 build environment; RapidOCR check passed.
+- Boundary: no real reports or credentials were used, and no knowledge-base capability was introduced.
+- Release qualification remains incomplete pending a separate no-Python clean-machine run and a physically disconnected or administrator-enforced firewall run. See `docs/desktop-acceptance.md`; the design status remains intentionally incomplete.
 
 ## Execution checkpoints
 
