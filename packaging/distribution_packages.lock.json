@@ -641,6 +641,13 @@
             "source_commit": "c6bc0c612605622aaef101a33a751f9de2ecc193"
           },
           {
+            "license_path": "licenses/CPython-3.13.14/third-party/LIBMPDEC-4.0.0-LICENSE.txt",
+            "license_sha256": "8905ffbd8c2f593f5636a8cdbf0ddc107aed902722fb0363efec4474616ca884",
+            "source_url": "https://www.python.org/ftp/python/3.13.14/Python-3.13.14.tgz",
+            "archive_path": "Python-3.13.14/Doc/license.rst#libmpdec",
+            "bundled_version": "4.0.0"
+          },
+          {
             "license_path": "licenses/CPython-3.13.14/third-party/EXPAT-COPYING.txt",
             "license_sha256": "31b15de82aa19a845156169a17a5488bf597e561b2c318d159ed583139b25e87",
             "source_url": "https://www.python.org/ftp/python/3.13.14/Python-3.13.14.tgz",

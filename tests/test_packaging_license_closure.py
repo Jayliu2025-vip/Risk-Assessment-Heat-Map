@@ -104,9 +104,13 @@ class PackagingLicenseClosureTests(unittest.TestCase):
                 "SQLITE-PUBLIC-DOMAIN.txt", "TCL-8.6.15-LICENSE.txt",
                 "TK-8.6.15-LICENSE.txt", "ZLIB-1.3.1-LICENSE.txt",
                 "LIBFFI-3.4.4-LICENSE.txt", "BZIP2-1.0.8-LICENSE.txt",
-                "XZ-5.2.5-COPYING.txt", "EXPAT-COPYING.txt",
+                "XZ-5.2.5-COPYING.txt", "LIBMPDEC-4.0.0-LICENSE.txt",
+                "EXPAT-COPYING.txt",
             }.issubset(notice_names)
         )
+        libmpdec = next(item for item in notices if item["license_path"].endswith("LIBMPDEC-4.0.0-LICENSE.txt"))
+        self.assertEqual("4.0.0", libmpdec["bundled_version"])
+        self.assertIn("DLLs/_decimal.pyd", cpython["artifact_locators"])
         webview = components["Microsoft WebView2 SDK"]["artifact_locators"]
         self.assertEqual(5, len(webview))
         self.assertIn("webview/lib/runtimes/win-x64/native/WebView2Loader.dll", webview)
@@ -168,7 +172,7 @@ class PackagingLicenseClosureTests(unittest.TestCase):
         )
         cpython = next(item for item in manifest["components"] if item["name"] == "CPython")
         self.assertEqual(30, len(cpython["artifacts"]))
-        self.assertEqual(11, len(cpython["files"]))
+        self.assertEqual(12, len(cpython["files"]))
         self.assertEqual(
             self.lock["components"][0]["artifact_hashes"],
             {item["path"]: item["sha256"] for item in cpython["artifacts"]},
