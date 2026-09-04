@@ -44,6 +44,13 @@ its exact official NuGet package. The Visual C++ prerequisite is the signed,
 versioned Microsoft `VC_redist.x64.exe`; its official Visual Studio 2026 V14
 Redistributable EULA and Microsoft redistribution reference are pinned in the
 lock. Machine-local System32 runtime DLLs are excluded from the onedir payload.
+The CPython component explicitly locks all 30 native DLL/PYD files selected from
+the official CPython 3.13.14 Windows installation and verifies every file hash.
+Its notice bundle includes the PSF source license, the signed official Windows
+installer license, and the exact OpenSSL, SQLite, Tcl, Tk, zlib, libffi, bzip2,
+XZ/liblzma and Expat license or public-domain notices used by that build. The
+packaging audit has no blanket exemption for files under the Python installation:
+an unlisted or hash-drifted Python native file blocks the build.
 Where an installed wheel omitted license
 text, the lock records the exact PyPI sdist URL, filename, archive hash and
 license hash. ANTLR and FlatBuffers did not publish a usable license-bearing PyPI

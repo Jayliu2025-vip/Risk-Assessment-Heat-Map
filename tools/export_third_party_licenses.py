@@ -266,6 +266,13 @@ def _copy_component(component: dict[str, object], output: Path) -> dict[str, obj
     for locator, artifact in zip(locators, artifacts, strict=True):
         if not artifact.is_file():
             raise LicenseMaterialUnavailable(f"BLOCKED package={name} file={locator.as_posix()}")
+    expected_hashes = component.get("artifact_hashes")
+    if expected_hashes is not None:
+        if not isinstance(expected_hashes, dict) or set(expected_hashes) != {item.as_posix() for item in locators}:
+            raise LicenseMaterialUnavailable(f"BLOCKED package={name} file=artifact-hash-lock")
+        for locator, artifact in zip(locators, artifacts, strict=True):
+            if _sha256(artifact) != expected_hashes[locator.as_posix()]:
+                raise LicenseMaterialUnavailable(f"BLOCKED package={name} file={locator.as_posix()} hash-mismatch")
     if not files:
         raise LicenseMaterialUnavailable(f"BLOCKED package={name} file=LICENSE*")
     component_root = output / "components" / _safe_name(name) / str(component["version"])
@@ -387,6 +394,17 @@ def audit_analysis_toc(
     detected: set[str] = set()
     ambient_native: set[str] = set()
     python_base = Path(sys.base_prefix).resolve()
+    cpython_components = [item for item in lock.get("components", []) if item.get("name") == "CPython"]
+    declared_python_artifacts: dict[Path, str] = {}
+    if cpython_components:
+        cpython = cpython_components[0]
+        locators = cpython.get("artifact_locators", [])
+        hashes = cpython.get("artifact_hashes", {})
+        if not locators or not isinstance(hashes, dict) or not hashes or set(hashes) != set(locators):
+            raise LicenseMaterialUnavailable("BLOCKED package=CPython file=artifact-hash-lock")
+        for locator in locators:
+            path = (python_base / locator).resolve()
+            declared_python_artifacts[path] = hashes[locator]
     declared_component_binaries = {
         value.lower()
         for component in lock.get("components", [])
@@ -411,10 +429,12 @@ def audit_analysis_toc(
         except OSError:
             continue
         file_owners = owners.get(resolved, ())
+        if resolved in declared_python_artifacts and _sha256(resolved) != declared_python_artifacts[resolved]:
+            raise LicenseMaterialUnavailable(f"BLOCKED package=CPython file={resolved.name} hash-mismatch")
         if (
             resolved.suffix.lower() in {".dll", ".exe", ".pyd", ".so", ".dylib"}
             and not file_owners
-            and not resolved.is_relative_to(python_base)
+            and resolved not in declared_python_artifacts
             and resolved.name.lower() not in declared_component_binaries
         ):
             ambient_native.add(resolved.name)
@@ -441,6 +461,18 @@ def audit_analysis_toc(
         for component, path in expected.items():
             if not path.is_file():
                 raise LicenseMaterialUnavailable(f"BLOCKED package={component} file=missing-packaged-component")
+        if cpython_components:
+            cpython = cpython_components[0]
+            for locator, expected_hash in cpython["artifact_hashes"].items():
+                packaged = dist_root / "_internal" / Path(locator).name
+                if not packaged.is_file():
+                    raise LicenseMaterialUnavailable(
+                        f"BLOCKED package=CPython file={Path(locator).name} missing-packaged-component"
+                    )
+                if _sha256(packaged) != expected_hash:
+                    raise LicenseMaterialUnavailable(
+                        f"BLOCKED package=CPython file={Path(locator).name} packaged-hash-mismatch"
+                    )
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError) as exc:
@@ -452,12 +484,28 @@ def audit_analysis_toc(
                 f"BLOCKED package={missing_manifest_package[0]} file=missing-license-manifest-package"
             )
         expected_components = {item["name"] for item in lock.get("components", [])}
-        manifest_components = {item["name"] for item in manifest.get("components", [])}
-        missing_manifest_component = sorted(expected_components - manifest_components)
+        manifest_component_records = {item["name"]: item for item in manifest.get("components", [])}
+        missing_manifest_component = sorted(expected_components - set(manifest_component_records))
         if missing_manifest_component:
             raise LicenseMaterialUnavailable(
                 f"BLOCKED package={missing_manifest_component[0]} file=missing-license-manifest-component"
             )
+        for component in lock.get("components", []):
+            if component.get("name") != "CPython":
+                continue
+            record = manifest_component_records["CPython"]
+            expected_artifacts = component.get("artifact_hashes", {})
+            actual_artifacts = {item.get("path"): item.get("sha256") for item in record.get("artifacts", [])}
+            if actual_artifacts != expected_artifacts:
+                raise LicenseMaterialUnavailable("BLOCKED package=CPython file=manifest-artifact-inventory")
+            provenance = component.get("vendored_provenance", {})
+            expected_license_hashes = {
+                item["license_sha256"]
+                for item in [provenance, *provenance.get("additional_license_files", [])]
+            }
+            actual_license_hashes = {item.get("sha256") for item in record.get("files", [])}
+            if not expected_license_hashes.issubset(actual_license_hashes):
+                raise LicenseMaterialUnavailable("BLOCKED package=CPython file=manifest-license-inventory")
     return {
         "detected_distributions": sorted(detected),
         "locked_distributions": len(locked),

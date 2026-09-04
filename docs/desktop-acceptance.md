@@ -17,7 +17,7 @@ This feature is a report-analysis workflow. It does not implement a knowledge ba
 - Microsoft Edge WebView2 Runtime: `152.0.4191.53`.
 - PyInstaller: `6.22.2`; Inno Setup compiler: `6.7.3`.
 - OCR backend: RapidOCR `3.9.2` with ONNX Runtime `1.29.0`; the build gate ran `rapidocr.exe check` successfully.
-- License closure: 58 exact Windows/CPython 3.13 distributions are locked; PyInstaller Analysis identified 52 distributions in the final application and all are covered. Four non-distribution components are also inventoried: CPython, the PyInstaller bootloader, Microsoft WebView2 SDK and Microsoft Visual C++ Runtime. The manifest contains artifact and license hashes without build-machine paths.
+- License closure: 58 exact Windows/CPython 3.13 distributions are locked; PyInstaller Analysis identified 52 distributions in the final application and all are covered. Four non-distribution components are also inventoried: CPython, the PyInstaller bootloader, Microsoft WebView2 SDK and Microsoft Visual C++ Runtime. CPython contributes 30 explicitly hashed native files and 11 copied PSF/Windows/third-party notice files; no Python-base directory exemption remains. The manifest contains artifact and license hashes without build-machine paths.
 
 ## Fresh verification matrix
 
@@ -26,10 +26,10 @@ Commands were run from the isolated `codex/audit-report-desktop` worktree.
 | Gate | Exact command | Result |
 | --- | --- | --- |
 | Whitespace | `git diff --check` | Exit 0; no whitespace errors. Git only reported the expected future LF-to-CRLF checkout notices for edited Markdown/PowerShell files. |
-| Python suite | `& 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' -m unittest discover -s tests -v` | Final run: `Ran 233 tests in 109.762s` and `OK`. |
-| Desktop UI | `npx playwright test tests/e2e/desktop_report.spec.js` | Final run: `3 passed (10.0s)`. |
+| Python suite | `& 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' -m unittest discover -s tests -v` | Final run: `Ran 236 tests in 87.436s` and `OK`. |
+| Desktop UI | `npx playwright test tests/e2e/desktop_report.spec.js` | Final run: `3 passed (9.2s)`. |
 | Process-level offline vertical slice | `& 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' tools\run_synthetic_desktop_acceptance.py --offline-verify` | `OFFLINE_GUARD_OK loopback_only=true`; `DESKTOP_ACCEPTANCE_OK findings=3 accepted=2 excluded=1 period=2026H2 source_unchanged=true temp_clean=true`. |
-| Final offline build | `pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\build_desktop.ps1 -PythonExe 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' -SkipTests -Offline` | `pip check`, real RapidOCR check, verified cached Microsoft prerequisite, 58-distribution/4-component license export, PyInstaller Analysis and COLLECT audits, onedir and Inno installer passed. The independent final 233/233 and 3/3 suites above ran against the same committed source. |
+| Final offline build | `pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\build_desktop.ps1 -PythonExe 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' -SkipTests -Offline` | `pip check`, real RapidOCR check, verified cached Microsoft prerequisite, 58-distribution/4-component license export, 30-file CPython native inventory, PyInstaller Analysis and COLLECT audits, onedir and Inno installer passed. The independent final 236/236 and 3/3 suites above ran against the same source. |
 | Installed-package gate | `pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_desktop_package.ps1` | Onedir synthetic smoke, silent per-user install, installed synthetic smoke and silent uninstall all passed; stderr was empty and `PACKAGE_PROCESSES=0` after verification. Earlier candidate builds were also run repeatedly to remove stdout-drain and installer handoff races before this final gate. |
 
 The final build removed an invalid class name from the PyInstaller hidden-import list; `keyring.backends.Windows` is the real module and exposes `WinVaultKeyring`. The remaining RapidOCR TensorRT warning is for an unused optional backend; the selected ONNX Runtime backend passed its real check and OCR tests.
@@ -37,10 +37,10 @@ The final build removed an invalid class name from the PyInstaller hidden-import
 ## Final artifact identity
 
 - Onedir executable: `D:\project\Risk Assessment Heat Map\.worktrees\audit-report-desktop\dist\RiskAssessmentHeatMap\RiskAssessmentHeatMap.exe`
-- Onedir executable SHA-256: `8F2F6001C013D77CB10A1313D951CD8BB49E03E258C1AE7FBCA61DE2E3320AA2`
+- Onedir executable SHA-256: `C1611FB75F58C48B532858E5A77C07FBE79D52B8B320C29AE6E4F91FC69FEBE1`
 - Installer: `D:\project\Risk Assessment Heat Map\.worktrees\audit-report-desktop\installer-output\RiskAssessmentHeatMap-Setup.exe`
-- Installer SHA-256: `B5166744B770B672B35FD826C26DBBB6A36BE632C5D4F5E2C07E49749A6909F8`
-- License manifest SHA-256: `5A5A5FF420C11FEF618210299779304BE25ABD1E12AC3A91537CAE43C09CDE81`
+- Installer SHA-256: `1E9BE3F5E378562E0827BB55C5871584DF738C75C19B1C078FD2CCF4B1ADB088`
+- License manifest SHA-256: `17CE4360B97CD8A7CE70328968B0C1C75BC74AA764E5BE5A3844DC8861993849`
 
 `build/`, `dist/` and `installer-output/` are ignored build products and are not committed to Git.
 
@@ -57,7 +57,7 @@ The final build removed an invalid class name from the PyInstaller hidden-import
 | 7. Existing deterministic scoring is authoritative | Writer/vertical tests recompute through `tools.common`; model-provided final risk values are rejected/ignored. | Pass. |
 | 8. Versioned Excel and original preservation | Preview-token, atomic write, collision and source-hash tests pass; vertical acceptance reports `source_unchanged=true`. | Pass. |
 | 9. No knowledge base/RAG/vector/report chat | Product boundary is explicit in README/manual/design; no such route, schema or UI is added. | Pass. |
-| 10. Tests, data minimization and cleanup | 233 Python tests, 3 Playwright tests, privacy scans, model-catalog projection, `temp_clean=true`, bounded package verifier and zero package processes after uninstall. | Current-host pass; physical-disconnect observation pending. |
+| 10. Tests, data minimization and cleanup | 236 Python tests, 3 Playwright tests, privacy scans, model-catalog projection, `temp_clean=true`, bounded package verifier and zero package processes after uninstall. | Current-host pass; physical-disconnect observation pending. |
 
 ## Synthetic vertical-slice details
 

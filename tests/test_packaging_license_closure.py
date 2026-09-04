@@ -6,6 +6,7 @@ import importlib.util
 import json
 from importlib import metadata
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -84,9 +85,27 @@ class PackagingLicenseClosureTests(unittest.TestCase):
 
     def test_native_component_lock_names_every_packaged_runtime_artifact(self):
         components = {item["name"]: item for item in self.lock["components"]}
-        self.assertEqual(
-            ["python3.dll", "python313.dll"],
-            components["CPython"]["artifact_locators"],
+        cpython = components["CPython"]
+        self.assertEqual(30, len(cpython["artifact_locators"]))
+        self.assertEqual(set(cpython["artifact_locators"]), set(cpython["artifact_hashes"]))
+        for required in (
+            "DLLs/libcrypto-3.dll", "DLLs/libssl-3.dll", "DLLs/libffi-8.dll",
+            "DLLs/sqlite3.dll", "DLLs/tcl86t.dll", "DLLs/tk86t.dll",
+            "DLLs/zlib1.dll", "DLLs/_ssl.pyd", "DLLs/_sqlite3.pyd",
+            "vcruntime140.dll", "vcruntime140_1.dll",
+        ):
+            self.assertIn(required, cpython["artifact_locators"])
+            self.assertRegex(cpython["artifact_hashes"][required], r"^[0-9a-f]{64}$")
+        notices = cpython["vendored_provenance"]["additional_license_files"]
+        notice_names = {Path(item["license_path"]).name for item in notices}
+        self.assertTrue(
+            {
+                "CPYTHON-WINDOWS-LICENSE.txt", "OPENSSL-3.0.21-LICENSE.txt",
+                "SQLITE-PUBLIC-DOMAIN.txt", "TCL-8.6.15-LICENSE.txt",
+                "TK-8.6.15-LICENSE.txt", "ZLIB-1.3.1-LICENSE.txt",
+                "LIBFFI-3.4.4-LICENSE.txt", "BZIP2-1.0.8-LICENSE.txt",
+                "XZ-5.2.5-COPYING.txt", "EXPAT-COPYING.txt",
+            }.issubset(notice_names)
         )
         webview = components["Microsoft WebView2 SDK"]["artifact_locators"]
         self.assertEqual(5, len(webview))
@@ -147,6 +166,13 @@ class PackagingLicenseClosureTests(unittest.TestCase):
             },
             component_names,
         )
+        cpython = next(item for item in manifest["components"] if item["name"] == "CPython")
+        self.assertEqual(30, len(cpython["artifacts"]))
+        self.assertEqual(11, len(cpython["files"]))
+        self.assertEqual(
+            self.lock["components"][0]["artifact_hashes"],
+            {item["path"]: item["sha256"] for item in cpython["artifacts"]},
+        )
         redist = next(
             item for item in manifest["components"]
             if item["name"] == "Microsoft Visual C++ Redistributable"
@@ -192,6 +218,26 @@ class PackagingLicenseClosureTests(unittest.TestCase):
         with self.assertRaisesRegex(exporter.LicenseMaterialUnavailable, "ambient-runtime.dll"):
             exporter.audit_analysis_toc(toc, {"packages": [], "components": []})
 
+    def test_analysis_audit_blocks_unlisted_native_file_inside_python_base(self):
+        exporter = _load_exporter()
+        python_exe = Path(sys.base_prefix) / "python.exe"
+        self.assertTrue(python_exe.is_file())
+        temp = Path(tempfile.mkdtemp(prefix="rahm-python-native-"))
+        toc = temp / "Analysis-00.toc"
+        toc.write_text(repr(([('python.exe', str(python_exe), 'BINARY')],)), encoding="utf-8")
+        component_only_lock = {"packages": [], "components": self.lock["components"]}
+        with self.assertRaisesRegex(exporter.LicenseMaterialUnavailable, "python.exe"):
+            exporter.audit_analysis_toc(toc, component_only_lock)
+
+    def test_cpython_component_rejects_artifact_hash_drift(self):
+        exporter = _load_exporter()
+        component = dict(next(item for item in self.lock["components"] if item["name"] == "CPython"))
+        component["artifact_hashes"] = dict(component["artifact_hashes"])
+        component["artifact_hashes"]["python313.dll"] = "0" * 64
+        output = Path(tempfile.mkdtemp(prefix="rahm-cpython-hash-")) / "licenses"
+        with self.assertRaisesRegex(exporter.LicenseMaterialUnavailable, "python313.dll.*hash-mismatch"):
+            exporter._copy_component(component, output)
+
     def test_dist_audit_rejects_license_manifest_missing_locked_component(self):
         exporter = _load_exporter()
         temp = Path(tempfile.mkdtemp(prefix="rahm-dist-license-audit-"))
@@ -209,12 +255,42 @@ class PackagingLicenseClosureTests(unittest.TestCase):
         incomplete = {
             "packages": [],
             "components": [
-                {"name": "CPython"},
                 {"name": "Microsoft WebView2 SDK"},
             ],
         }
         with self.assertRaisesRegex(exporter.LicenseMaterialUnavailable, "Microsoft WebView2 SDK"):
             exporter.audit_analysis_toc(toc, incomplete, dist)
+
+    def test_dist_audit_rejects_incomplete_cpython_manifest_inventory(self):
+        exporter = _load_exporter()
+        temp = Path(tempfile.mkdtemp(prefix="rahm-cpython-manifest-audit-"))
+        toc = temp / "Analysis-00.toc"
+        toc.write_text(repr(()), encoding="utf-8")
+        dist = temp / "dist"
+        licenses = dist / "_internal" / "licenses"
+        licenses.mkdir(parents=True)
+        (dist / "RiskAssessmentHeatMap.exe").write_bytes(b"bootloader")
+        python_dll = dist / "_internal" / "python313.dll"
+        python_dll.write_bytes(b"python")
+        python_hash = exporter._sha256(python_dll)
+        (licenses / "manifest.json").write_text(
+            json.dumps({"packages": [], "components": [{"name": "CPython", "artifacts": [], "files": []}]}),
+            encoding="utf-8",
+        )
+        lock = {
+            "packages": [],
+            "components": [{
+                "name": "CPython",
+                "artifact_locators": ["python313.dll"],
+                "artifact_hashes": {"python313.dll": python_hash},
+                "vendored_provenance": {
+                    "license_sha256": "1" * 64,
+                    "additional_license_files": [],
+                },
+            }],
+        }
+        with self.assertRaisesRegex(exporter.LicenseMaterialUnavailable, "manifest-artifact-inventory"):
+            exporter.audit_analysis_toc(toc, lock, dist)
 
     def test_build_runs_analysis_audit_after_pyinstaller(self):
         script = (ROOT / "tools" / "build_desktop.ps1").read_text(encoding="utf-8")
