@@ -17,7 +17,7 @@ This feature is a report-analysis workflow. It does not implement a knowledge ba
 - Microsoft Edge WebView2 Runtime: `152.0.4191.53`.
 - PyInstaller: `6.22.2`; Inno Setup compiler: `6.7.3`.
 - OCR backend: RapidOCR `3.9.2` with ONNX Runtime `1.29.0`; the build gate ran `rapidocr.exe check` successfully.
-- License closure: 58 exact Windows/CPython 3.13 distributions are locked; PyInstaller Analysis identified 52 distributions in the final application and all are covered. Four non-distribution components are also inventoried: CPython, the PyInstaller bootloader, Microsoft WebView2 SDK and Microsoft Visual C++ Runtime. CPython contributes 30 explicitly hashed native files and 12 copied PSF/Windows/third-party notice files, including libmpdec 4.0.0 for `_decimal.pyd`; no Python-base directory exemption remains. The manifest contains artifact and license hashes without build-machine paths.
+- License closure: 58 exact Windows/CPython 3.13 distributions are locked; PyInstaller Analysis identified 52 distributions in the final application and all are covered. Four non-distribution components are also inventoried: CPython, the PyInstaller bootloader, Microsoft WebView2 SDK and Microsoft Visual C++ Runtime. CPython contributes 30 explicitly hashed native files and 13 copied PSF/Windows/third-party notice files, including the complete versioned `Doc/license.rst` and libmpdec 4.0.0 for `_decimal.pyd`; no Python-base directory exemption remains. The manifest contains artifact and license hashes without build-machine paths.
 
 ## Fresh verification matrix
 
@@ -37,10 +37,10 @@ The final build removed an invalid class name from the PyInstaller hidden-import
 ## Final artifact identity
 
 - Onedir executable: `D:\project\Risk Assessment Heat Map\.worktrees\audit-report-desktop\dist\RiskAssessmentHeatMap\RiskAssessmentHeatMap.exe`
-- Onedir executable SHA-256: `C3A07EA5FC16A3C681C49583947F826E79699393E8F26BFB14768B38B8FA7FE5`
+- Onedir executable SHA-256: `F5CA9EF2717D2E348516E79E8E771B3907F343D6872B9B24012483C4DC8F13E3`
 - Installer: `D:\project\Risk Assessment Heat Map\.worktrees\audit-report-desktop\installer-output\RiskAssessmentHeatMap-Setup.exe`
-- Installer SHA-256: `66B51346B21F736C8B53EFDC59BB99CCEB7BDB222A01240C42B04CFA63E74127`
-- License manifest SHA-256: `245AB7DF4E370BF6AD97864F7A6003B3C646AED0CECA9F6BBACDFC00B390BCD3`
+- Installer SHA-256: `23BFD812E91570E3D3BBD83799432A2779AFB70B68DE458F04BB75D9EC0959C5`
+- License manifest SHA-256: `0F6A45B031CBF7B7FAD346BEE123B825425E2451890A6546E14C2923E76CA027`
 
 `build/`, `dist/` and `installer-output/` are ignored build products and are not committed to Git.
 

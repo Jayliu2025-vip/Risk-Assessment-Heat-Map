@@ -1417,7 +1417,7 @@ git commit -m "docs: publish the Windows desktop report assessment workflow"
 ### Execution evidence recorded 2026-09-03
 
 - Current-host matrix: 236 Python tests, 3 Playwright tests, process-level offline synthetic vertical slice, full PyInstaller/Inno rebuild, onedir smoke, silent install, installed smoke and silent uninstall all passed.
-- Final installer: `installer-output/RiskAssessmentHeatMap-Setup.exe`, SHA-256 `66B51346B21F736C8B53EFDC59BB99CCEB7BDB222A01240C42B04CFA63E74127`.
+- Final installer: `installer-output/RiskAssessmentHeatMap-Setup.exe`, SHA-256 `23BFD812E91570E3D3BBD83799432A2779AFB70B68DE458F04BB75D9EC0959C5`.
 - Environment: Windows 11 x64 build 26200; WebView2 `152.0.4191.53`; Python 3.13.14 x64 build environment; RapidOCR check passed.
 - Boundary: no real reports or credentials were used, and no knowledge-base capability was introduced.
 - Release qualification remains incomplete pending a separate no-Python clean-machine run and a physically disconnected or administrator-enforced firewall run. See `docs/desktop-acceptance.md`; the design status remains intentionally incomplete.

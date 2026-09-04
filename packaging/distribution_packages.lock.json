@@ -593,6 +593,12 @@
             "source_url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe"
           },
           {
+            "license_path": "licenses/CPython-3.13.14/third-party/CPYTHON-DOC-LICENSE.rst",
+            "license_sha256": "62f2c9c2c75d511170eb464ad5f83b78cc1f37eb2eb49c2846c9aa6c4557ee99",
+            "source_url": "https://www.python.org/ftp/python/3.13.14/Python-3.13.14.tgz",
+            "archive_path": "Python-3.13.14/Doc/license.rst"
+          },
+          {
             "license_path": "licenses/CPython-3.13.14/third-party/OPENSSL-3.0.21-LICENSE.txt",
             "license_sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
             "source_url": "https://raw.githubusercontent.com/python/cpython-source-deps/460451a0bb19cdbf0ab1add4de1420d143995467/LICENSE.txt",
