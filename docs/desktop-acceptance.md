@@ -4,6 +4,8 @@
 
 Evidence date: 2026-09-04.
 
+The single-entity report catalog and multi-report batch workspace are included in the current artifacts recorded below. Current-host source, real WebView2 startup, onedir smoke, silent install, installed smoke and silent uninstall have passed. A separate clean Windows machine and physical-disconnect observation remain outstanding, so release qualification is still incomplete.
+
 The Windows desktop report-to-risk implementation and its installer passed the current-host automated and installed-package gates below. All test reports, findings, model responses and workbooks were synthetic. No real audit report, real API credential or paid model endpoint was used.
 
 Release qualification remains **incomplete** until the same installer is exercised on a separate clean Windows machine that has no Python installation and under a physically disconnected or administrator-enforced firewall condition. The current host proves process-level offline behavior and a self-contained packaged runtime, but it is not a substitute for those two external observations.
@@ -26,20 +28,20 @@ Commands were run from the isolated `codex/audit-report-desktop` worktree.
 | Gate | Exact command | Result |
 | --- | --- | --- |
 | Whitespace | `git diff --check` | Exit 0; no whitespace errors. Git only reported the expected future LF-to-CRLF checkout notices for edited Markdown/PowerShell files. |
-| Python suite | `& 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' -m unittest discover -s tests -v` | Final run: `Ran 236 tests in 87.436s` and `OK`. |
-| Desktop UI | `npx playwright test tests/e2e/desktop_report.spec.js` | Final run: `3 passed (9.2s)`. |
+| Python suite | `& 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' -m unittest discover -s tests -v` | Final run: `Ran 249 tests in 98.092s` and `OK`. |
+| Desktop UI | `npx playwright test tests/e2e --reporter=line` | Final run: `7 passed (6.0s)`, covering the prototype, report ingestion, multi-report batching, remapping stale risk IDs, excluding temporarily skipped evidence, browser isolation and sample-state isolation. |
 | Process-level offline vertical slice | `& 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' tools\run_synthetic_desktop_acceptance.py --offline-verify` | `OFFLINE_GUARD_OK loopback_only=true`; `DESKTOP_ACCEPTANCE_OK findings=3 accepted=2 excluded=1 period=2026H2 source_unchanged=true temp_clean=true`. |
-| Final offline build | `pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\build_desktop.ps1 -PythonExe 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' -SkipTests -Offline` | `pip check`, real RapidOCR check, verified cached Microsoft prerequisite, 58-distribution/4-component license export, 30-file CPython native inventory, PyInstaller Analysis and COLLECT audits, onedir and Inno installer passed. The independent final 236/236 and 3/3 suites above ran against the same source. |
+| Final offline build | `pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\build_desktop.ps1 -PythonExe 'C:\Users\ahnsl\AppData\Local\Temp\rahm-desktop-venv-01a0628b\Scripts\python.exe' -SkipTests -Offline` | `pip check`, real RapidOCR check, verified cached Microsoft prerequisite, 58-distribution/4-component license export, 30-file CPython native inventory, PyInstaller Analysis and COLLECT audits, onedir and Inno installer passed. The independent final 249/249 and 6/6 suites above ran against the same source. |
 | Installed-package gate | `pwsh -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_desktop_package.ps1` | Onedir synthetic smoke, silent per-user install, installed synthetic smoke and silent uninstall all passed; stderr was empty and `PACKAGE_PROCESSES=0` after verification. Earlier candidate builds were also run repeatedly to remove stdout-drain and installer handoff races before this final gate. |
 
 The final build removed an invalid class name from the PyInstaller hidden-import list; `keyring.backends.Windows` is the real module and exposes `WinVaultKeyring`. The remaining RapidOCR TensorRT warning is for an unused optional backend; the selected ONNX Runtime backend passed its real check and OCR tests.
 
 ## Final artifact identity
 
-- Onedir executable: `D:\project\Risk Assessment Heat Map\.worktrees\audit-report-desktop\dist\RiskAssessmentHeatMap\RiskAssessmentHeatMap.exe`
-- Onedir executable SHA-256: `F5CA9EF2717D2E348516E79E8E771B3907F343D6872B9B24012483C4DC8F13E3`
-- Installer: `D:\project\Risk Assessment Heat Map\.worktrees\audit-report-desktop\installer-output\RiskAssessmentHeatMap-Setup.exe`
-- Installer SHA-256: `23BFD812E91570E3D3BBD83799432A2779AFB70B68DE458F04BB75D9EC0959C5`
+- Onedir executable: `D:\project\Risk Assessment Heat Map\dist\RiskAssessmentHeatMap\RiskAssessmentHeatMap.exe`
+- Onedir executable SHA-256: `22724516E50958EF96E57123091BD33142866849E9F4C5EE4E98938A7AE00256`
+- Installer: `D:\project\Risk Assessment Heat Map\installer-output\RiskAssessmentHeatMap-Setup.exe`
+- Installer SHA-256: `BE9673322FB6AADA0BF5DA0E4398FB477E8DDB58AC1DAA407233CABFDCB55BFF`
 - License manifest SHA-256: `0F6A45B031CBF7B7FAD346BEE123B825425E2451890A6546E14C2923E76CA027`
 
 `build/`, `dist/` and `installer-output/` are ignored build products and are not committed to Git.

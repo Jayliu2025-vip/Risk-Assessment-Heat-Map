@@ -30,6 +30,12 @@ class DesktopDocumentationTests(unittest.TestCase):
             "不覆盖原工作簿",
             "虚构测试数据",
             "非生产",
+            "单主体信息目录",
+            "上传日期",
+            "不自动加载示例数据",
+            "相似发现处理",
+            "为同一风险的两条证据",
+            "清空报告列表",
         )
         for label, body in documents.items():
             with self.subTest(document=label):
@@ -45,9 +51,12 @@ class DesktopDocumentationTests(unittest.TestCase):
             "模型输出只是建议",
             "历史审计发现不能单独证明当前剩余风险",
             "%LOCALAPPDATA%\\RiskAssessmentHeatMap",
-            "删除本地任务",
+            "报告删除",
             "正式真源",
             "--offline-verify",
+            "报告目录",
+            "风险评估批次",
+            "不会复制原始报告",
         ):
             self.assertIn(phrase, manual)
 

@@ -138,7 +138,14 @@ class DesktopBridgeTests(unittest.TestCase):
 
     def test_exact_js_public_allowlist(self):
         actual = {name for name, value in inspect.getmembers(type(self.bridge), inspect.isfunction) if not name.startswith("_")}
-        self.assertEqual(actual, {"get_bootstrap", "choose_report", "get_source_preview", "save_model_profile", "test_model_profile", "start_analysis", "get_task", "get_findings", "save_finding", "merge_findings", "split_finding", "preview_commit", "commit_to_workbook", "cleanup_task"})
+        self.assertEqual(actual, {
+            "get_bootstrap", "choose_report", "choose_catalog_root", "configure_workspace",
+            "list_catalog_reports", "save_report_to_catalog", "trash_catalog_report",
+            "clear_catalog_reports", "create_catalog_batch", "get_source_preview",
+            "save_model_profile", "test_model_profile", "start_analysis", "get_task",
+            "get_findings", "save_finding", "merge_findings", "split_finding",
+            "preview_commit", "commit_to_workbook", "cleanup_task",
+        })
 
     def test_choose_report_returns_token_only_and_rejects_wrong_purpose(self):
         chosen = self.select(self.report)
@@ -496,7 +503,122 @@ class DesktopBridgeTests(unittest.TestCase):
         risk = {"risk_id": "R001", "name": "合成风险", "domain": "采购与外包", "description": "合成事实", "owner_dept": "审计部", "period": "2026H1", "likelihood": 3, **{dim: 2 for dim in DIMS}, "rationale": "合成依据"}
         with patch("desktop.bridge.load_dataset", return_value=({}, [risk], [])):
             committed = self.bridge.commit_to_workbook("T-1", selected["selection_token"], "2026H1", decision, preview["commit_token"])
-        self.assertEqual(set(committed) - {"ok"}, {"workbook_path", "export_dir", "period_data"})
+            self.assertEqual(set(committed) - {"ok"}, {"workbook_path", "export_dir", "period_data"})
+
+    def configure_catalog(self, entity_name="虚构主体甲"):
+        catalog_root = self.root / "catalog"
+        catalog_root.mkdir(exist_ok=True)
+        self.window.selected = [str(catalog_root)]
+        selected = self.bridge.choose_catalog_root()
+        self.assertTrue(selected["ok"])
+        configured = self.bridge.configure_workspace(selected["selection_token"], entity_name)
+        self.assertTrue(configured["ok"])
+        return catalog_root, configured
+
+    def test_catalog_workspace_is_selected_once_and_returned_by_bootstrap(self):
+        catalog_root, configured = self.configure_catalog()
+        self.assertEqual(configured["workspace"]["entity_name"], "虚构主体甲")
+        self.assertEqual(Path(self.store.get_setting("catalog_root")), catalog_root.resolve())
+        bootstrap = self.bridge.get_bootstrap()
+        self.assertEqual(bootstrap["workspace"]["entity_name"], "虚构主体甲")
+        self.assertEqual(bootstrap["catalog_reports"], [])
+        self.assertEqual(self.window.calls[-1]["allow_multiple"], False)
+
+    def test_reviewed_task_is_atomically_saved_to_catalog_then_removed_from_sqlite(self):
+        self.configure_catalog()
+        self.seed_task("T-catalog")
+        accepted = finding("T-catalog", review_status="已接受")
+        self.store.save_findings([accepted])
+        saved = self.bridge.save_report_to_catalog("T-catalog", {
+            "audit_project": "采购专项审计",
+            "report_title": "采购管理专项审计报告",
+            "report_date": "2026-08-28",
+        })
+        self.assertTrue(saved["ok"])
+        self.assertEqual(saved["report"]["audit_project"], "采购专项审计")
+        self.assertIsNone(self.store.get_task("T-catalog"))
+        self.assertEqual(self.store.list_findings("T-catalog"), [])
+        catalog = self.bridge.list_catalog_reports()
+        self.assertEqual(catalog["reports"][0]["finding_count"], 1)
+        self.assertNotIn(str(self.report), str(catalog))
+
+    def test_catalog_rejects_pending_review_and_supports_trash_and_clear(self):
+        self.configure_catalog()
+        self.seed_task("T-pending")
+        pending = self.bridge.save_report_to_catalog("T-pending", {
+            "audit_project": "采购审计", "report_title": "待复核报告", "report_date": "",
+        })
+        self.assertEqual(pending["code"], "REPORT_REVIEW_INCOMPLETE")
+        for task_id, title in (("T-one", "报告一"), ("T-two", "报告二")):
+            self.seed_task(task_id)
+            self.store.save_findings([finding(task_id, review_status="已接受")])
+            self.assertTrue(self.bridge.save_report_to_catalog(task_id, {
+                "audit_project": "采购审计", "report_title": title, "report_date": "",
+            })["ok"])
+        reports = self.bridge.list_catalog_reports()["reports"]
+        trashed = self.bridge.trash_catalog_report(reports[0]["report_id"])
+        self.assertTrue(trashed["ok"])
+        cleared = self.bridge.clear_catalog_reports()
+        self.assertEqual(cleared["count"], 1)
+        self.assertEqual(self.bridge.list_catalog_reports()["reports"], [])
+
+    def test_catalog_batch_clones_exact_report_versions_and_preserves_source_labels(self):
+        catalog_root, _ = self.configure_catalog()
+        from desktop.catalog import CatalogStore
+        catalog = CatalogStore(catalog_root)
+        first = catalog.save_report(
+            AnalysisTask("T-A", "a.pdf", "a" * 64, "2026-09-01T00:00:00Z", "待复核", "synthetic", "text"),
+            [finding("T-A", "F-A", review_status="已接受")],
+            audit_project="采购专项审计", report_title="报告甲",
+        )
+        invalid = finding("T-B", "F-B", review_status="已接受")
+        invalid.matched_risk_id = "R999"
+        second = catalog.save_report(
+            AnalysisTask("T-B", "b.pdf", "b" * 64, "2026-09-02T00:00:00Z", "待复核", "synthetic", "ocr"),
+            [invalid], audit_project="供应链内控审计", report_title="报告乙",
+        )
+        workbook_token = self.select(self.workbook, "workbook")["selection_token"]
+        batch = self.bridge.create_catalog_batch(
+            [first["report_id"], second["report_id"]], workbook_token, "2026H2"
+        )
+        self.assertTrue(batch["ok"], batch)
+        self.assertEqual(len(batch["reports"]), 2)
+        cloned = batch["findings"]
+        self.assertEqual(len(cloned), 2)
+        remap = next(item for item in cloned if "报告乙" in item["source_page"])
+        self.assertEqual(remap["matched_risk_id"], "")
+        self.assertEqual(remap["review_status"], "待确认")
+        source = self.bridge.get_source_preview(batch["task"]["task_id"], remap["finding_id"])
+        self.assertEqual(source["kind"], "text")
+        self.assertEqual(source["source_report_title"], "报告乙")
+        refs = batch["report_refs"]
+        self.assertEqual({item["recognition_version"] for item in refs}, {1})
+
+    def test_completed_catalog_batch_writes_immutable_batch_snapshot(self):
+        catalog_root, _ = self.configure_catalog()
+        from desktop.catalog import CatalogStore
+        catalog = CatalogStore(catalog_root)
+        report = catalog.save_report(
+            AnalysisTask("T-A", "a.pdf", "a" * 64, "2026-09-01T00:00:00Z", "待复核", "synthetic", "text"),
+            [finding("T-A", "F-A", review_status="已接受")],
+            audit_project="采购专项审计", report_title="报告甲",
+        )
+        workbook_token = self.select(self.workbook, "workbook")["selection_token"]
+        batch = self.bridge.create_catalog_batch([report["report_id"]], workbook_token, "2026H2")
+        self.assertTrue(batch["ok"], batch)
+        finding_id = batch["findings"][0]["finding_id"]
+        decision = self.create_decision(finding_id, period="2026H2")
+        preview = self.bridge.preview_commit(batch["task"]["task_id"], workbook_token, "2026H2", [decision], "preview", True)
+        self.assertTrue(preview["ok"])
+        period_risk = {"risk_id": "R001", "name": "虚构风险", "domain": "采购与外包", "description": "虚构事实", "owner_dept": "审计部", "period": "2026H2", "likelihood": 3, **{dim: 2 for dim in DIMS}, "rationale": "虚构依据"}
+        with patch("desktop.bridge.load_dataset", return_value=({}, [period_risk], [])):
+            committed = self.bridge.commit_to_workbook(batch["task"]["task_id"], workbook_token, "2026H2", [decision], preview["commit_token"])
+        self.assertTrue(committed["ok"])
+        snapshots = list((catalog_root / "batches").glob("*/batch.json"))
+        self.assertEqual(len(snapshots), 1)
+        snapshot = CatalogStore(catalog_root).load_batch(snapshots[0].parent.name)
+        self.assertEqual(snapshot["report_refs"][0]["report_id"], report["report_id"])
+        self.assertEqual(snapshot["period"], "2026H2")
 
     def test_preview_rejects_decisions_outside_the_selected_period(self):
         self.seed_task()
@@ -565,9 +687,12 @@ class AppBootstrapTests(unittest.TestCase):
             def close(self): self.closed = True
 
         class Bridge:
-            def __init__(self): self.pipeline = PipelineClose(); self.window = None
+            def __init__(self): self.pipeline = PipelineClose(); self.window = None; self.webview = None
             def __getattr__(self, name):
-                if name == "attach_window": return lambda window: setattr(self, "window", window)
+                if name == "attach_window":
+                    def attach(window, webview_module=None):
+                        self.window, self.webview = window, webview_module
+                    return attach
                 raise AttributeError(name)
 
         class Event:
@@ -593,6 +718,7 @@ class AppBootstrapTests(unittest.TestCase):
         self.assertEqual((created["width"], created["height"], created["min_size"]), (1440, 920, (1120, 720)))
         self.assertIs(created["js_api"], bridge)
         self.assertIs(bridge.window, webview.window)
+        self.assertIs(bridge.webview, webview)
         self.assertEqual(webview.calls[1], ("start", {"gui": "edgechromium", "private_mode": True, "debug": False}))
         self.assertTrue(bridge.pipeline.closed)
 

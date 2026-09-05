@@ -60,18 +60,21 @@ class DesktopWebContractTests(unittest.TestCase):
             self.assertNotIn(stale_marker, self.script)
 
     def test_desktop_script_uses_nested_scores_controls_and_race_guards(self) -> None:
-        for marker in ("impact_scores", "load_controls", "controls_confirmed", "previewGeneration",
+        for marker in ("impact_scores", "load_controls", "report-controls-confirmed", "previewGeneration",
                        "selectedFindingId", "startBusy", "pollGeneration", "previewBusy",
-                       "workbookGeneration", "controlsWorkbookToken"):
+                       "analysisWorkbook", "batchWorkbook", "controlsWorkbookToken"):
             self.assertIn(marker, self.script)
         self.assertNotIn("payload[key]=value;", self.script)
 
     def test_workbook_is_selected_before_analysis_and_cannot_switch_at_commit(self) -> None:
         self.assertIn('id="report-choose-workbook"', self.html)
-        self.assertIn("选择正式工作簿", self.html)
+        self.assertIn("选择风险目录工作簿", self.html)
+        self.assertIn('id="batch-choose-workbook"', self.html)
+        self.assertIn("选择当前正式工作簿", self.html)
         self.assertNotIn("选择工作簿并预览", self.html)
-        self.assertIn('call("start_analysis",selectedReport,selectedWorkbook,period', self.script)
-        self.assertNotIn('call("choose_report","workbook")', self.script.split("async function preview", 1)[1])
+        self.assertIn('call("start_analysis", selectedReport, analysisWorkbook, "CATALOG"', self.script)
+        self.assertIn('call("create_catalog_batch", selectedCatalogIds, batchWorkbook, period)', self.script)
+        self.assertNotIn('call("choose_report", "workbook")', self.script.split("async function preview", 1)[1])
 
     def test_decision_ui_preserves_merge_lineage_owner_and_remediation(self) -> None:
         for marker in ("merged_finding_ids", "merged_into", "ownerDeptByFinding",
@@ -79,7 +82,7 @@ class DesktopWebContractTests(unittest.TestCase):
             self.assertIn(marker, self.script)
         self.assertNotIn('owner_dept:"审计部"', self.script)
         self.assertNotIn("被合并项标记为排除", self.script)
-        self.assertIn('if(f.review_status==="已排除")return {action:"exclude",finding_ids}', self.script)
+        self.assertIn('if (finding.review_status === "已排除") return {action:"exclude",finding_ids};', self.script)
 
     def test_playwright_package_contract_is_pinned(self) -> None:
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
@@ -95,6 +98,12 @@ class DesktopWebContractTests(unittest.TestCase):
         ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("/node_modules/", ignored)
         self.assertIn("/test-results/", ignored)
+
+    def test_startup_is_empty_and_desktop_never_exposes_sample_action(self) -> None:
+        self.assertNotIn("if(!periods().length&&window.SAMPLE_DATA) loadSample();", self.html)
+        self.assertIn('$("btn-sample").addEventListener("click",loadSample);', self.html)
+        self.assertIn('document.body.classList.add("desktop-mode")', self.script)
+        self.assertIn("body.desktop-mode #btn-sample", self.css)
 
 
 if __name__ == "__main__":

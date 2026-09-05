@@ -162,6 +162,28 @@ class DesktopStoreTests(unittest.TestCase):
         self.assertEqual(asdict(store.get_task("T-atomic")), asdict(active))
         self.assertEqual(store.list_findings("T-atomic"), [])
 
+    def test_app_settings_store_catalog_root_but_not_report_content(self):
+        store = self.make_store()
+        catalog_root = str(store.db_path.parent / "user-selected-catalog")
+        self.assertIsNone(store.get_setting("catalog_root"))
+        store.set_setting("catalog_root", catalog_root)
+        self.assertEqual(store.get_setting("catalog_root"), catalog_root)
+        store.set_setting("catalog_root", catalog_root + "-new")
+        self.assertEqual(store.get_setting("catalog_root"), catalog_root + "-new")
+        self.assertEqual(store.table_columns("app_settings"), ["key", "value"])
+        payload = store.db_path.read_bytes()
+        self.assertIn("user-selected-catalog-new".encode(), payload)
+        self.assertNotIn("完整报告正文不得持久化".encode(), payload)
+
+    def test_app_setting_key_and_value_are_bounded_strings(self):
+        store = self.make_store()
+        with self.assertRaises(ValidationError):
+            store.set_setting("", "value")
+        with self.assertRaises(ValidationError):
+            store.set_setting("catalog_root", "")
+        with self.assertRaises(ValidationError):
+            store.get_setting("x" * 129)
+
 
 if __name__ == "__main__":
     unittest.main()

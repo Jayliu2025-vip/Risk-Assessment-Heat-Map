@@ -12,10 +12,12 @@ from .models import AnalysisTask, FindingDraft, ModelProfile, ValidationError
 _TASK_COLUMNS = tuple(field.name for field in fields(AnalysisTask))
 _FINDING_COLUMNS = tuple(field.name for field in fields(FindingDraft))
 _PROFILE_COLUMNS = tuple(field.name for field in fields(ModelProfile))
+_SETTING_COLUMNS = ("key", "value")
 _TABLE_COLUMNS = {
     "analysis_tasks": _TASK_COLUMNS,
     "findings": _FINDING_COLUMNS,
     "model_profiles": _PROFILE_COLUMNS,
+    "app_settings": _SETTING_COLUMNS,
 }
 
 
@@ -63,6 +65,10 @@ class DesktopStore:
                 connection.execute(
                     "CREATE TABLE IF NOT EXISTS model_profiles ("
                     "name TEXT PRIMARY KEY, base_url TEXT NOT NULL, model TEXT NOT NULL, supports_vision INTEGER NOT NULL)"
+                )
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS app_settings ("
+                    "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
                 )
         finally:
             connection.close()
@@ -276,6 +282,52 @@ class DesktopStore:
         try:
             rows = connection.execute(f"SELECT {columns} FROM model_profiles ORDER BY name").fetchall()
             return [self._row_profile(row) for row in rows]
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _setting_key(key: object) -> str:
+        if not isinstance(key, str) or not key or len(key) > 128 or not key.replace("_", "a").isalnum():
+            raise ValidationError("设置名称无效")
+        return key
+
+    @staticmethod
+    def _setting_value(value: object) -> str:
+        if not isinstance(value, str) or not value.strip() or len(value) > 4096:
+            raise ValidationError("设置值无效")
+        return value.strip()
+
+    def get_setting(self, key: str) -> str | None:
+        checked_key = self._setting_key(key)
+        connection = self._connect()
+        try:
+            row = connection.execute("SELECT value FROM app_settings WHERE key = ?", (checked_key,)).fetchone()
+            return None if row is None else str(row["value"])
+        finally:
+            connection.close()
+
+    def set_setting(self, key: str, value: str) -> str:
+        checked_key = self._setting_key(key)
+        checked_value = self._setting_value(value)
+        connection = self._connect()
+        try:
+            with connection:
+                connection.execute(
+                    "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (checked_key, checked_value),
+                )
+        finally:
+            connection.close()
+        return checked_value
+
+    def delete_analysis_task(self, task_id: str) -> None:
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise ValidationError("task_id不能为空")
+        connection = self._connect()
+        try:
+            with connection:
+                connection.execute("DELETE FROM analysis_tasks WHERE task_id = ?", (task_id.strip(),))
         finally:
             connection.close()
 

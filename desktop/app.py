@@ -90,7 +90,7 @@ def main(*, webview_module: Any | None = None, bridge_factory: Callable[[], Any]
         window = webview_module.create_window(title="审计风险评估热力图谱", url=url, js_api=bridge,
                                               width=1440, height=920, min_size=(1120, 720))
         if bridge is not None:
-            bridge.attach_window(window)
+            bridge.attach_window(window, webview_module)
             window.events.closed += lambda: _close_pipeline(bridge)
         webview_module.start(gui="edgechromium", private_mode=True, debug=False)
     finally:

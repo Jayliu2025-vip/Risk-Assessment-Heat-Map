@@ -14,11 +14,13 @@ import tempfile
 import threading
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlparse
+from datetime import datetime, timezone
 
+from .catalog import CatalogError, CatalogStore
 from .extraction import (ExtractionError, MAX_PDF_PAGES, MAX_RENDER_PIXELS, MAX_SOURCE_BYTES,
                          PDF_RENDER_SCALE, extract_docx_source_text)
 from .model_client import ModelError
-from .models import ConfirmedControl, FindingDraft, ModelProfile, RiskDecision, ValidationError
+from .models import AnalysisTask, ConfirmedControl, FindingDraft, ModelProfile, RiskDecision, ValidationError
 from tools.common import DIMS, load_dataset
 from .workbook_writer import load_current_controls, load_risk_catalog
 
@@ -67,6 +69,8 @@ def project_model_catalog(catalog: Iterable[Mapping[str, Any]]) -> list[dict[str
 
 
 def _safe_error(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, CatalogError):
+        return {"ok": False, "code": exc.code, "message": str(exc).split(": ", 1)[-1]}
     if isinstance(exc, _BridgeError):
         return {"ok": False, "code": exc.code, "message": exc.message}
     if isinstance(exc, ValidationError):
@@ -104,7 +108,8 @@ class DesktopBridge:
                  risk_catalog: Iterable[Mapping[str, Any]], pdf_preview_renderer: Callable[[Path, int], bytes] | None = None,
                  docx_preview_extractor: Callable[[Path, str, Path], str] | None = None,
                  risk_catalog_loader: Callable[[Path], list[dict[str, Any]]] | None = None,
-                 webview_module: Any | None = None, profile_lock: threading.RLock | None = None) -> None:
+                 webview_module: Any | None = None, profile_lock: threading.RLock | None = None,
+                 catalog_factory: Callable[[Path], CatalogStore] | None = None) -> None:
         self._store = store
         self._pipeline = pipeline
         self._credential_store = credential_store
@@ -119,8 +124,10 @@ class DesktopBridge:
         self._docx_preview_extractor = docx_preview_extractor
         self._risk_catalog_loader = risk_catalog_loader or load_risk_catalog
         self._webview = webview_module
+        self._catalog_factory = catalog_factory or CatalogStore
         self._window: Any | None = None
         self._selections: dict[str, tuple[Path, str]] = {}
+        self._directory_selections: dict[str, Path] = {}
         self._task_sources: dict[str, tuple[Path, str]] = {}
         self._task_workbooks: dict[str, tuple[Path, str, str, str, list[dict[str, Any]]]] = {}
         self._commit_previews: dict[str, tuple[str, str, str, tuple[RiskDecision, ...]]] = {}
@@ -130,6 +137,8 @@ class DesktopBridge:
         self._task_locks_guard = threading.Lock()
         self._preview_slots = threading.BoundedSemaphore(1)
         self._preview_before_attach: Callable[[], Any] | None = None
+        self._catalog_batches: dict[str, dict[str, Any]] = {}
+        self._catalog_batch_sources: dict[tuple[str, str], dict[str, Any]] = {}
 
     def __getattr__(self, name: str) -> Any:
         # Window attachment is an application bootstrap hook, not a JS API.
@@ -137,8 +146,10 @@ class DesktopBridge:
             return self._attach_window
         raise AttributeError(name)
 
-    def _attach_window(self, window: Any) -> None:
+    def _attach_window(self, window: Any, webview_module: Any | None = None) -> None:
         self._window = window
+        if webview_module is not None:
+            self._webview = webview_module
 
     def _task_lock(self, task_id: Any) -> threading.RLock:
         if not isinstance(task_id, str) or not task_id:
@@ -211,6 +222,26 @@ class DesktopBridge:
             if item.finding_id == finding_id:
                 return item
         raise _BridgeError("NOT_FOUND", "请求的发现不存在")
+
+    def _catalog(self) -> CatalogStore:
+        root = getattr(self._store, "get_setting", lambda _key: None)("catalog_root")
+        if not root:
+            raise CatalogError("WORKSPACE_NOT_CONFIGURED", "请先设置单主体信息目录")
+        return self._catalog_factory(Path(root))
+
+    def _forget_task_runtime(self, task_id: str) -> None:
+        source_info = self._task_sources.pop(task_id, None)
+        if source_info is not None:
+            self._selections.pop(source_info[1], None)
+        workbook_info = self._task_workbooks.pop(task_id, None)
+        if workbook_info is not None:
+            self._selections.pop(workbook_info[1], None)
+        for token, preview in list(self._commit_previews.items()):
+            if preview[0] == task_id:
+                self._commit_previews.pop(token, None)
+        self._catalog_batches.pop(task_id, None)
+        for key in [key for key in self._catalog_batch_sources if key[0] == task_id]:
+            self._catalog_batch_sources.pop(key, None)
 
     @staticmethod
     def _decisions(value: Any) -> tuple[RiskDecision, ...]:
@@ -299,9 +330,165 @@ class DesktopBridge:
     def get_bootstrap(self) -> dict[str, Any]:
         from tools.common import DIMS, DIM_LABELS, DOMAINS
         tasks = [asdict(item) for item in getattr(self._store, "list_tasks", lambda: [])()]
+        workspace, catalog_reports, catalog_root = None, [], getattr(self._store, "get_setting", lambda _key: None)("catalog_root")
+        if catalog_root:
+            try:
+                catalog = self._catalog_factory(Path(catalog_root))
+                workspace, catalog_reports = catalog.workspace(), catalog.list_reports()
+            except CatalogError:
+                workspace, catalog_reports = None, []
         return {"profiles": [asdict(item) for item in self._store.list_model_profiles()], "tasks": tasks,
                 "domains": list(DOMAINS), "dimensions": list(DIMS), "dimension_labels": dict(DIM_LABELS),
-                "risk_catalog": [], "capabilities": {"desktop": True, "source_preview": True}}
+                "risk_catalog": [], "workspace": workspace, "catalog_root": catalog_root or "",
+                "catalog_reports": catalog_reports,
+                "capabilities": {"desktop": True, "source_preview": True, "report_catalog": True}}
+
+    @_public
+    def choose_catalog_root(self) -> dict[str, Any]:
+        if self._window is None:
+            raise _BridgeError("WINDOW_UNAVAILABLE", "目录选择窗口不可用")
+        dialog_type = getattr(self._webview, "FOLDER_DIALOG", "folder")
+        selected = self._window.create_file_dialog(dialog_type=dialog_type, allow_multiple=False)
+        if not selected:
+            raise _BridgeError("SELECTION_CANCELLED", "未选择信息目录")
+        candidate = Path(selected[0]).resolve()
+        if not candidate.is_dir():
+            raise _BridgeError("CATALOG_ROOT_INVALID", "所选信息目录不可用")
+        token = secrets.token_urlsafe(32)
+        self._directory_selections[token] = candidate
+        return {"selection_token": token, "display_path": str(candidate)}
+
+    @_public
+    def configure_workspace(self, selection_token: Any, entity_name: Any) -> dict[str, Any]:
+        if not isinstance(selection_token, str) or selection_token not in self._directory_selections:
+            raise _BridgeError("SELECTION_NOT_FOUND", "所选信息目录已失效，请重新选择")
+        root = self._directory_selections[selection_token]
+        catalog = self._catalog_factory(root)
+        workspace = catalog.initialize(entity_name)
+        self._store.set_setting("catalog_root", str(root))
+        self._directory_selections.clear()
+        return {"workspace": workspace, "catalog_root": str(root), "reports": catalog.list_reports()}
+
+    @_public
+    def list_catalog_reports(self) -> dict[str, Any]:
+        return {"reports": self._catalog().list_reports()}
+
+    @_public
+    def save_report_to_catalog(self, task_id: Any, metadata: Any) -> dict[str, Any]:
+        if not isinstance(task_id, str) or not isinstance(metadata, Mapping):
+            raise ValidationError("报告归档参数无效")
+        if set(metadata) != {"audit_project", "report_title", "report_date"}:
+            raise ValidationError("报告归档字段无效")
+        with self._task_lock(task_id):
+            task = self._store.get_task(task_id)
+            if task is None:
+                raise _BridgeError("NOT_FOUND", "任务不存在")
+            findings = self._store.list_findings(task_id)
+            catalog = self._catalog()
+            record = catalog.save_report(
+                task, findings,
+                audit_project=metadata.get("audit_project"),
+                report_title=metadata.get("report_title"),
+                report_date=metadata.get("report_date"),
+            )
+            cleanup = getattr(self._pipeline, "cleanup_task", None)
+            if callable(cleanup):
+                cleanup(task_id)
+            self._forget_task_runtime(task_id)
+            self._store.delete_analysis_task(task_id)
+            report = next(item for item in catalog.list_reports() if item["report_id"] == record["report_id"])
+        return {"report": report}
+
+    @_public
+    def trash_catalog_report(self, report_id: Any) -> dict[str, Any]:
+        if not isinstance(report_id, str):
+            raise ValidationError("report_id无效")
+        return self._catalog().trash_report(report_id)
+
+    @_public
+    def clear_catalog_reports(self) -> dict[str, Any]:
+        return self._catalog().clear_reports()
+
+    @_public
+    def create_catalog_batch(self, report_ids: Any, workbook_selection_token: Any, period: Any) -> dict[str, Any]:
+        if (not isinstance(report_ids, (list, tuple)) or not report_ids or len(report_ids) > 50 or
+                len(set(report_ids)) != len(report_ids) or any(not isinstance(item, str) for item in report_ids)):
+            raise ValidationError("请选择一至五十份不重复报告")
+        if not isinstance(period, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", period) is None:
+            raise ValidationError("评估期间格式无效")
+        workbook = self._selection(workbook_selection_token, "workbook")
+        before = _file_hash(workbook)
+        risk_catalog = self._risk_catalog_loader(workbook)
+        if _file_hash(workbook) != before:
+            raise _BridgeError("WORKBOOK_HASH_CHANGED", "工作簿读取期间发生变更，请重新选择")
+        catalog = self._catalog()
+        records = [catalog.load_report(report_id) for report_id in report_ids]
+        workspace = catalog.workspace()
+        if workspace is None or any(record.get("entity_id") != workspace.get("entity_id") for record in records):
+            raise CatalogError("WORKSPACE_ENTITY_MISMATCH", "所选报告不属于当前主体")
+        task_id = f"BATCH-{secrets.token_hex(12)}"
+        batch_id = task_id
+        known_risk_ids = {str(item.get("risk_id", "")) for item in risk_catalog}
+        clones: list[FindingDraft] = []
+        report_refs: list[dict[str, Any]] = []
+        sources: dict[str, dict[str, Any]] = {}
+        for report_index, record in enumerate(records, start=1):
+            report_refs.append({
+                "report_id": record["report_id"], "recognition_version": record["recognition_version"],
+                "file_hash": record["file_hash"], "report_title": record["report_title"],
+                "upload_date": record["upload_date"], "audit_project": record["audit_project"],
+            })
+            accepted_entries = [entry for entry in record.get("findings", [])
+                                if isinstance(entry, Mapping) and isinstance(entry.get("finding"), Mapping)
+                                and entry["finding"].get("review_status") == "已接受"]
+            id_map = {entry["finding"]["finding_id"]: f"F-{report_index}-{position}"
+                      for position, entry in enumerate(accepted_entries, start=1)}
+            for entry in accepted_entries:
+                original = FindingDraft(**dict(entry["finding"]))
+                provenance = dict(entry.get("provenance") or {})
+                matched = original.matched_risk_id if original.matched_risk_id in known_risk_ids else ""
+                requires_remap = bool(original.matched_risk_id and not matched)
+                source_label = f"{record['report_title']}｜{original.source_page}"
+                clone = FindingDraft(
+                    task_id=task_id,
+                    finding_id=id_map[original.finding_id],
+                    title=original.title,
+                    fact_summary=original.fact_summary,
+                    source_page=source_label,
+                    source_excerpt=original.source_excerpt,
+                    matched_risk_id=matched,
+                    domain=original.domain,
+                    likelihood=original.likelihood,
+                    impact_scores=original.impact_scores,
+                    rationale=f"[来源：{record['audit_project']}｜上传 {record['upload_date']}｜{original.source_page}]\n{original.rationale}",
+                    needs_review=original.needs_review or requires_remap,
+                    review_status="待确认" if requires_remap else "已接受",
+                    merged_finding_ids=tuple(id_map[item] for item in original.merged_finding_ids if item in id_map),
+                    merged_into=id_map.get(original.merged_into, ""),
+                )
+                clones.append(clone)
+                sources[clone.finding_id] = {
+                    "source_report_id": record["report_id"],
+                    "source_report_title": record["report_title"],
+                    "source_upload_date": record["upload_date"],
+                    "source_audit_project": record["audit_project"],
+                    "source_finding_id": provenance.get("source_finding_id", original.finding_id),
+                    "source_page": original.source_page,
+                    "source_excerpt": original.source_excerpt,
+                }
+        if not clones:
+            raise CatalogError("BATCH_HAS_NO_FINDINGS", "所选报告没有已接受发现")
+        digest = hashlib.sha256(json.dumps(report_refs, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        task = AnalysisTask(task_id, "catalog-batch.json", digest, datetime.now(timezone.utc).isoformat(),
+                            "待复核", "catalog", "catalog")
+        self._store.commit_analysis_result(task, clones)
+        self._task_workbooks[task_id] = (workbook, str(workbook_selection_token), before, period,
+                                         [dict(item) for item in risk_catalog])
+        self._catalog_batches[task_id] = {"batch_id": batch_id, "report_refs": report_refs}
+        for finding_id, source in sources.items():
+            self._catalog_batch_sources[(task_id, finding_id)] = source
+        return {"task": asdict(task), "findings": [asdict(item) for item in clones],
+                "reports": report_refs, "report_refs": report_refs, "risk_catalog": risk_catalog, "period": period}
 
     @_public
     def choose_report(self, purpose: str = "report") -> dict[str, Any]:
@@ -394,6 +581,9 @@ class DesktopBridge:
 
     def _get_source_preview(self, task_id: Any, finding_id: Any, selection_token: Any = None) -> dict[str, Any]:
         task = self._store.get_task(task_id)
+        batch_source = self._catalog_batch_sources.get((str(task_id), str(finding_id)))
+        if task is not None and task.extraction_method == "catalog" and batch_source is not None:
+            return {"kind": "text", **batch_source}
         source_info = self._task_sources.get(task_id)
         if task is None:
             raise _BridgeError("SOURCE_RESELECT_REQUIRED", "请重新选择原始报告以查看来源")
@@ -555,8 +745,25 @@ class DesktopBridge:
             self._commit_previews.pop(str(workbook_selection_token), None)
             result = self._workbook_writer.write_versioned_workbook(source, checked, tuple(self._store.list_findings(task_id)), expected_commit_token=expected_commit_token)
             _, risks, controls = load_dataset(result.export_dir / checked_period, result.export_dir / "config.json")
-        return {"workbook_path": str(result.workbook_path), "export_dir": str(result.export_dir),
-                "period_data": {"period": checked_period, "risks": risks, "controls": controls}}
+            batch = self._catalog_batches.get(str(task_id))
+            batch_id = None
+            if batch is not None:
+                batch_id = batch["batch_id"]
+                output_path = Path(result.workbook_path)
+                self._catalog().save_batch(
+                    batch_id=batch_id,
+                    period=checked_period,
+                    report_refs=batch["report_refs"],
+                    workbook={"file_name": source.name, "file_hash": _file_hash(source)},
+                    decisions=[asdict(item) for item in checked],
+                    output={"file_name": output_path.name,
+                            "file_hash": _file_hash(output_path) if output_path.is_file() else ""},
+                )
+        response = {"workbook_path": str(result.workbook_path), "export_dir": str(result.export_dir),
+                    "period_data": {"period": checked_period, "risks": risks, "controls": controls}}
+        if batch_id is not None:
+            response["batch_id"] = batch_id
+        return response
 
     @_public
     def cleanup_task(self, task_id: Any) -> dict[str, Any]:
@@ -564,14 +771,5 @@ class DesktopBridge:
             if not isinstance(task_id, str) or not task_id: raise ValidationError("task_id不能为空")
             cleanup = getattr(self._pipeline, "cleanup_task", None)
             if callable(cleanup): cleanup(task_id)
-            source_info = self._task_sources.pop(task_id, None)
-            if source_info is not None:
-                self._selections.pop(source_info[1], None)
-            workbook_info = self._task_workbooks.pop(task_id, None)
-            if workbook_info is not None:
-                self._selections.pop(workbook_info[1], None)
-            for token, preview in list(self._commit_previews.items()):
-                if preview[0] == task_id:
-                    self._commit_previews.pop(token, None)
-                    self._selections.pop(token, None)
+            self._forget_task_runtime(task_id)
         return {"task_id": task_id}
