@@ -82,6 +82,7 @@ class Writer:
 class Client:
     def __init__(self, profile, key): self.profile, self.key = profile, key
     def test_connection(self): return True
+    def detect_vision_support(self): return False
     def close(self): pass
 
 
@@ -165,8 +166,40 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertNotIn("api_key", saved)
         self.assertNotIn("sk-synthetic-secret", str(saved))
         tested = self.bridge.test_model_profile("synthetic")
-        self.assertEqual(tested, {"ok": True, "hostname": "model.example.test"})
+        self.assertEqual(tested["hostname"], "model.example.test")
+        self.assertEqual(tested["vision_status"], "unsupported")
         self.assertNotIn("sk-synthetic-secret", str(self.bridge.get_bootstrap()))
+
+    def test_vision_capability_is_detected_for_the_same_saved_profile(self):
+        for capability, status in ((True, "supported"), (False, "unsupported"), (None, "unknown")):
+            with self.subTest(capability=capability):
+                payload = self.profile()
+                payload.pop("supports_vision")
+                self.assertTrue(self.bridge.save_model_profile(payload)["ok"])
+                class DetectingClient(Client):
+                    def detect_vision_support(self): return capability
+                self.bridge._model_client_factory = DetectingClient
+                result = self.bridge.test_model_profile("synthetic")
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["vision_status"], status)
+                self.assertIs(result["profile"]["supports_vision"], capability is True)
+                self.assertEqual(len(self.store.list_model_profiles()), 1)
+                self.assertIs(self.bridge._verified_profile("synthetic").supports_vision, capability is True)
+
+    def test_manual_vision_flag_does_not_bypass_detection(self):
+        result = self.bridge.save_model_profile({**self.profile(), "supports_vision": True})
+        self.assertFalse(result["profile"]["supports_vision"])
+
+    def test_vision_probe_failure_keeps_text_connection_available(self):
+        from desktop.model_client import ModelError
+        class ProbeUnavailable(Client):
+            def detect_vision_support(self): raise ModelError("MODEL_TIMEOUT", "synthetic failure")
+        self.bridge.save_model_profile(self.profile())
+        self.bridge._model_client_factory = ProbeUnavailable
+        result = self.bridge.test_model_profile("synthetic")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["vision_status"], "unknown")
+        self.assertFalse(self.bridge._verified_profile("synthetic").supports_vision)
 
     def test_profile_key_pair_rolls_back_if_profile_persistence_fails(self):
         self.bridge.save_model_profile(self.profile())

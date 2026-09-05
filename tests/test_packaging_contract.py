@@ -21,7 +21,14 @@ ROOT = Path(__file__).resolve().parents[1]
 class PackagingContractTests(unittest.TestCase):
     def test_installer_has_desktop_patch_version(self):
         script = (ROOT / "packaging" / "RiskAssessmentHeatMap.iss").read_text(encoding="utf-8")
-        self.assertIn("AppVersion=1.2.1", script)
+        self.assertIn("AppVersion=1.2.2", script)
+
+    def test_packaged_smoke_requires_image_probe(self):
+        from unittest.mock import patch
+        from desktop.smoke import run_synthetic_smoke, SmokeError
+        with patch("desktop.smoke.ModelClient.detect_vision_support", return_value=False):
+            with self.assertRaisesRegex(SmokeError, "VISION_PROBE"):
+                run_synthetic_smoke()
 
     def test_upgrade_cleanup_is_limited_to_removed_vendor_components(self):
         script = (ROOT / "packaging" / "RiskAssessmentHeatMap.iss").read_text(encoding="utf-8")

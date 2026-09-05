@@ -8,7 +8,7 @@
 [Setup]
 AppId={{F4B850A3-50D4-4EB2-BE7D-1EFBF77A1DAB}
 AppName={#AppName}
-AppVersion=1.2.1
+AppVersion=1.2.2
 DefaultDirName={localappdata}\Programs\RiskAssessmentHeatMap
 DefaultGroupName=Risk Assessment Heat Map
 DisableProgramGroupPage=yes

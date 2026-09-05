@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import base64
+from io import BytesIO
 import ipaddress
 import json
 import logging
@@ -85,6 +87,7 @@ class LocalFakeServer:
 
     def __init__(self) -> None:
         self.requests = 0
+        self.vision_probes = 0
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -100,13 +103,31 @@ class LocalFakeServer:
                 return
             def do_POST(self) -> None:  # noqa: N802
                 owner.requests += 1
+                payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                content = payload["messages"][-1]["content"]
+                if content == "只返回 OK":
+                    self.reply(200, {"choices": [{"message": {"content": "OK"}}]})
+                    return
+                if isinstance(content, list):
+                    from PIL import Image
+                    encoded = content[1]["image_url"]["url"].removeprefix("data:image/png;base64,")
+                    with Image.open(BytesIO(base64.b64decode(encoded, validate=True))) as image:
+                        if image.format != "PNG" or image.size != (240, 80):
+                            self.reply(500, {"error": "invalid synthetic probe"})
+                            return
+                        image.verify()
+                    owner.vision_probes += 1
+                    self.reply(400, {"error": "synthetic text-only endpoint"})
+                    return
                 body = {"choices": [{"message": {"content": json.dumps({"findings": [
                     {"finding_id": "F-001", "title": "Synthetic one", "fact_summary": "Synthetic only.", "source_page": "1", "source_excerpt": "SYNTHETIC TEST DATA", "matched_risk_id": "R003", "domain": "资金活动", "likelihood": 3, "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "Synthetic local evidence.", "needs_review": True},
                     {"finding_id": "F-002", "title": "Synthetic two", "fact_summary": "Synthetic only.", "source_page": "2", "source_excerpt": "SYNTHETIC TEST DATA", "matched_risk_id": "R003", "domain": "资金活动", "likelihood": 3, "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "Synthetic local evidence.", "needs_review": True},
                     {"finding_id": "F-003", "title": "Synthetic three", "fact_summary": "Synthetic only.", "source_page": "3", "source_excerpt": "SYNTHETIC TEST DATA", "matched_risk_id": "R003", "domain": "资金活动", "likelihood": 3, "impact_scores": {dim: 2 for dim in DIMS}, "rationale": "Synthetic local evidence.", "needs_review": True},
                 ]}, ensure_ascii=False)}}]}
+                self.reply(200, body)
+            def reply(self, status: int, body: Any) -> None:
                 raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
-                self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+                self.send_response(status); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -138,6 +159,10 @@ def run_synthetic_smoke() -> None:
             _, catalog, _ = load_dataset(resource_path("data/export/2026H1"), resource_path("data/export/config.json"))
             with LocalFakeServer() as server:
                 profile = ModelProfile("synthetic-local", server.base_url, "synthetic-model", False)
+                with ModelClient(profile, "synthetic-key") as client:
+                    client.test_connection()
+                    if client.detect_vision_support() is not False or server.vision_probes != 1:
+                        raise SmokeError("VISION_PROBE")
                 extracted: list[Any] = []
                 def extractor(source: Path, task_dir: Path):
                     result = extract_report(source, task_dir, RapidOcrEngine())

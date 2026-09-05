@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory=$true)][string]$InstallerPath,
     [Parameter(Mandatory=$true)][string]$PreviousInstallerPath,
     [Parameter(Mandatory=$true)][string]$PythonExe,
-    [Parameter(Mandatory=$true)][string]$ReportPath
+    [Parameter(Mandatory=$true)][string]$ReportPath,
+    [string]$ExpectedVersion
 )
 $ErrorActionPreference = 'Stop'
 $releaseRepo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -50,7 +51,8 @@ function Install-Release([string]$Exe, [string]$Phase) {
     }
     $entry = Get-ItemProperty -LiteralPath $releaseKey
     if ([IO.Path]::GetFullPath($entry.InstallLocation).TrimEnd('\') -ne $releaseInstallRoot) { throw 'INSTALL_REGISTRY_PATH_MISMATCH' }
-    $shortcut = if($Phase -eq 'previous-install') { $releaseLegacyShortcutPaths[0] } else { Join-Path $releaseGroupRoot 'Risk Assessment Heat Map.lnk' }
+    if($Phase -ne 'previous-install' -and $ExpectedVersion -and $entry.DisplayVersion -ne $ExpectedVersion) { throw 'INSTALL_VERSION_MISMATCH' }
+    $shortcut = if($entry.DisplayVersion -eq '1.0') { $releaseLegacyShortcutPaths[0] } else { Join-Path $releaseGroupRoot 'Risk Assessment Heat Map.lnk' }
     if (-not (Test-Path -LiteralPath $shortcut)) { throw 'SHORTCUT_MISSING' }
     Invoke-ExactSmoke (Join-Path $releaseInstallRoot 'RiskAssessmentHeatMap.exe')
     Assert-ReleaseState

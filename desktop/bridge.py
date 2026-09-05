@@ -177,7 +177,8 @@ class DesktopBridge:
         normalize_endpoint(value["base_url"])
         profile = ModelProfile(
             name=value.get("name"), base_url=value.get("base_url"), model=value.get("model"),
-            supports_vision=value.get("supports_vision"),
+            # Capability is determined by the service check, never by a UI switch.
+            supports_vision=False,
         )
         key = value.get("api_key", "")
         if not isinstance(key, str):
@@ -546,13 +547,23 @@ class DesktopBridge:
             if not key:
                 raise _BridgeError("MODEL_CREDENTIAL_NOT_FOUND", "未找到模型密钥")
             client = self._model_client_factory(profile, key)
+            capability = None
             try:
                 client.test_connection()
+                detect_vision = getattr(client, "detect_vision_support", None)
+                if callable(detect_vision):
+                    try:
+                        capability = detect_vision()
+                    except (ModelError, OSError):
+                        capability = None
             finally:
                 close = getattr(client, "close", None)
                 if callable(close): close()
+            profile.supports_vision = capability is True
+            self._store.save_model_profile(profile)
             self._tested_profiles[profile.name] = self._profile_fingerprint(profile, key)
-        return {"hostname": urlparse(profile.base_url).hostname or ""}
+        status = "supported" if capability is True else "unsupported" if capability is False else "unknown"
+        return {"hostname": urlparse(profile.base_url).hostname or "", "profile": asdict(profile), "vision_status": status}
 
     @_public
     def start_analysis(self, selection_token: Any, workbook_selection_token: Any, period: Any, profile_name: Any) -> dict[str, Any]:

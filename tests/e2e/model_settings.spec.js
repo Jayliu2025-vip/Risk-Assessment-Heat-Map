@@ -15,7 +15,7 @@ for (const preset of [
     await expect(page.locator('#model-status')).toContainText('连接正常');
     const saved = await page.evaluate(() => window.modelCalls[0]);
     expect(saved.base_url).toBe(preset.url);
-    expect(saved.supports_vision).toBe(false);
+    expect(saved.supports_vision).toBeUndefined();
   });
 }
 
@@ -35,7 +35,7 @@ async function openSettings(page, existing = false) {
         window.modelCalls.push({operation:'test',name});
         await new Promise(resolve => setTimeout(resolve, 120));
         const saved = window.modelCalls.filter(call => call.operation === 'save').at(-1);
-        return window.modelFailure || {ok:true,hostname:new URL(saved.base_url).hostname};
+        return window.modelFailure || {ok:true,hostname:new URL(saved.base_url).hostname,vision_status:window.visionResult || 'unsupported',profile:{name:saved.name,base_url:saved.base_url,model:saved.model,supports_vision:window.visionResult === 'supported'}};
       },
     }};
   }, {existing});
@@ -49,11 +49,14 @@ async function openSettings(page, existing = false) {
 test('first setup needs only provider and key, then saves current form before testing', async ({page}) => {
   await openSettings(page);
   await expect(page.locator('#model-provider')).toBeVisible();
+  await expect(page.locator('#model-advanced')).toHaveCount(0);
+  await expect(page.locator('#model-supports-vision')).toHaveCount(0);
   await expect(page.locator('#report-step-review')).toBeHidden();
   await page.locator('#model-provider').selectOption('deepseek');
   await page.locator('#model-api-key').fill('synthetic-key');
   await page.getByRole('button',{name:'保存并验证',exact:true}).click();
   await expect(page.locator('#model-status')).toContainText('连接正常');
+  await expect(page.locator('#model-capability')).toContainText('仅使用文字');
   const calls = await page.evaluate(() => window.modelCalls);
   expect(calls.map(call => call.operation)).toEqual(['save','test']);
   expect(calls[0].base_url).toBe('https://api.deepseek.com/v1');
@@ -64,6 +67,28 @@ test('first setup needs only provider and key, then saves current form before te
   await expect(page.locator('#report-start')).toBeEnabled();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.screenshot({path:'output/playwright/model-settings-success.png',fullPage:true});
+});
+
+test('multimodal support is automatic with a single saved configuration', async ({page}) => {
+  await openSettings(page);
+  await page.evaluate(() => {window.visionResult='supported';});
+  await page.locator('#model-provider').selectOption('kimi');
+  await page.locator('#model-api-key').fill('synthetic-key');
+  await page.getByRole('button',{name:'保存并验证',exact:true}).click();
+  await expect(page.locator('#model-capability')).toContainText('支持图片');
+  await expect(page.locator('#model-capability')).toContainText('自动');
+  await expect(page.locator('#report-model-profile option')).toHaveCount(2);
+  await expect(page.locator('#report-start')).toBeEnabled();
+});
+
+test('uncertain image capability only adds a hint and allows text use', async ({page}) => {
+  await openSettings(page);
+  await page.evaluate(() => {window.visionResult='unknown';});
+  await page.locator('#model-provider').selectOption('kimi');
+  await page.locator('#model-api-key').fill('synthetic-key');
+  await page.getByRole('button',{name:'保存并验证',exact:true}).click();
+  await expect(page.locator('#model-capability')).toContainText('暂未确认');
+  await expect(page.locator('#report-start')).toBeEnabled();
 });
 
 test('editing existing profile fills fields, keeps blank key and exposes failures locally', async ({page}) => {

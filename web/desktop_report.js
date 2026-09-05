@@ -9,13 +9,14 @@
   let controlsByFinding = {}, ownerDeptByFinding = {}, remediationByFinding = {}, previewBusy = false;
   let modelBusy = false, modelDirty = false;
   const verifiedProfiles = new Set();
+  const modelCapabilities = new Map();
   // Official API guides checked 2026-09-05. Presets are starting values, not quality guarantees.
   const modelPresets = {
     deepseek: {name:"DeepSeek", base_url:"https://api.deepseek.com/v1", models:["deepseek-v4-flash","deepseek-v4-pro"], help:"https://api-docs.deepseek.com/zh-cn/", note:"使用 DeepSeek 开放平台的 API 密钥。默认模型可修改，实际可用性以验证结果为准。"},
-    "qwen-cn": {name:"百炼", base_url:"https://dashscope.aliyuncs.com/compatible-mode/v1", models:["qwen-plus","qwen-turbo"], help:"https://help.aliyun.com/zh/model-studio/get-api-key/", note:"此预设用于中国大陆按量付费 API。其他地域、业务空间或套餐请按官方指南修改高级设置中的地址，并使用配套密钥。"},
+    "qwen-cn": {name:"百炼", base_url:"https://dashscope.aliyuncs.com/compatible-mode/v1", models:["qwen-plus","qwen-turbo"], help:"https://help.aliyun.com/zh/model-studio/get-api-key/", note:"此预设用于中国大陆按量付费 API。其他地域、业务空间或套餐请按官方指南修改服务地址，并使用配套密钥。"},
     glm: {name:"GLM", base_url:"https://open.bigmodel.cn/api/paas/v4", models:["glm-5"], help:"https://docs.bigmodel.cn/cn/guide/start/quick-start", note:"使用智谱开放平台的通用 API 密钥与账户额度。本预设使用通用接口；Coding Plan 的专用接口与使用范围请以官方说明为准。"},
     kimi: {name:"Kimi", base_url:"https://api.moonshot.cn/v1", models:["kimi-k2.5"], help:"https://platform.kimi.com/docs/get-api-key", note:"使用 Kimi 开放平台的 API 密钥。聊天会员或 Coding 套餐不等同于本预设的通用 API 服务。实际可用性以验证结果为准。"},
-    custom: {name:"自定义模型", base_url:"", models:[], help:"", note:"请向服务商或单位管理员获取服务地址、模型名称和 API 密钥；填写高级设置中的服务地址。支持聊天兼容接口。"},
+    custom: {name:"自定义模型", base_url:"", models:[], help:"", note:"请向服务商或单位管理员获取服务地址、模型名称和 API 密钥。支持聊天兼容接口。"},
   };
   const $ = id => document.getElementById(id);
   const dims = ["imp_financial","imp_compliance","imp_operation","imp_reputation","imp_fraud","imp_strategy","imp_data","imp_hse"];
@@ -173,17 +174,16 @@
     $("model-name").readOnly = Boolean(profile);
     $("model-base-url").value = profile?.base_url || "";
     $("model-model").value = profile?.model || "";
-    $("model-supports-vision").checked = Boolean(profile?.supports_vision);
     $("model-api-key").value = "";
     $("model-api-key").placeholder = profile ? "留空保留已保存密钥；如需更换请粘贴新密钥" : "粘贴服务商提供的 API 密钥";
     const provider = Object.keys(modelPresets).find(key => modelPresets[key].base_url && modelPresets[key].base_url.replace(/\/v1$/, "") === (profile?.base_url || "").replace(/\/$/, "").replace(/\/v1$/, ""));
     $("model-provider").value = profile ? provider || "custom" : "";
     updateProviderHelp();
-    $("model-advanced").open = Boolean(profile && !provider);
     if (!profile) $("model-settings").open = true;
     modelDirty = false;
     clearModelErrors(); updateDestination();
-    modelStatus(profile ? (verifiedProfiles.has(profile.name) ? "连接正常，可以开始识别。连接验证不代表报告分析质量已验证。" : "已保存，待验证。每次打开软件后，请点击“保存并验证”。") : "尚未配置，请先选择服务商。", profile && verifiedProfiles.has(profile.name) ? "ready" : "pending");
+    updateCapabilityHint();
+    modelStatus(profile ? (verifiedProfiles.has(profile.name) ? "连接正常，可以开始识别。" : "已保存，待验证。每次打开软件后，请点击“保存并验证”。") : "尚未配置，请先选择服务商。", profile && verifiedProfiles.has(profile.name) ? "ready" : "pending");
   }
 
   function modelStatus(text, state = "pending") {
@@ -197,9 +197,15 @@
   }
 
   function modelInputError(id, text) {
-    if (["model-name","model-base-url"].includes(id)) $("model-advanced").open = true;
     $(id).setAttribute("aria-invalid", "true"); $(id).focus();
     modelStatus(text, "error");
+  }
+
+  function updateCapabilityHint() {
+    const status = modelDirty ? null : modelCapabilities.get($("report-model-profile").value);
+    $("model-capability").textContent = status === "supported" ? "支持图片，文字识别失败时自动读取页面。" :
+      status === "unsupported" ? "图片调用不可用，将仅使用文字；无法识别的页面需人工复核。" :
+      status === "unknown" ? "图片能力暂未确认，先使用文字识别。" : "保存时自动检查图片能力，无需另配模型。";
   }
 
   function updateDestination() {
@@ -218,6 +224,7 @@
 
   function markModelDirty() {
     modelDirty = true; clearModelErrors(); updateDestination();
+    updateCapabilityHint();
     modelStatus("配置已修改，请保存并验证后使用。");
   }
 
@@ -227,14 +234,12 @@
     if (preset) {
       $("model-base-url").value = preset.base_url;
       $("model-model").value = preset.models[0] || "";
-      $("model-supports-vision").checked = false;
       if (!$("report-model-profile").value) {
         const used = new Set((bootstrap?.profiles || []).map(item => item.name));
         let name = preset.name, index = 2;
         while (used.has(name)) name = `${preset.name} ${index++}`;
         $("model-name").value = name;
       }
-      $("model-advanced").open = !preset.base_url;
     }
     updateProviderHelp(); markModelDirty();
   }
@@ -242,7 +247,7 @@
   async function saveProfile() {
     if (modelBusy) return;
     clearModelErrors();
-    const value = {name:$("model-name").value.trim(), base_url:$("model-base-url").value.trim(), model:$("model-model").value.trim(), api_key:$("model-api-key").value, supports_vision:$("model-supports-vision").checked};
+    const value = {name:$("model-name").value.trim(), base_url:$("model-base-url").value.trim(), model:$("model-model").value.trim(), api_key:$("model-api-key").value};
     if (!$("model-provider").value) { modelInputError("model-provider", "请先选择服务商。"); return; }
     for (const [field, id, label] of [["name","model-name","配置名称"],["base_url","model-base-url","服务地址"],["model","model-model","模型名称"]]) {
       if (!value[field]) { modelInputError(id, `请填写${label}。`); return; }
@@ -254,6 +259,7 @@
     $("model-save").textContent = "正在验证…";
     message("", false);
     verifiedProfiles.delete(value.name);
+    modelCapabilities.delete(value.name);
     modelStatus("正在保存并连接模型服务，请稍候…", "busy");
     let statusText, statusState;
     try {
@@ -261,10 +267,15 @@
       $("model-api-key").value = "";
       bootstrap.profiles = (bootstrap.profiles || []).filter(profile => profile.name !== saved.profile.name).concat(saved.profile);
       profileOptions(saved.profile.name);
-      modelStatus("设置已保存，正在发送测试文字…", "busy");
+      modelStatus("设置已保存，正在检查连接和图片能力…", "busy");
       const result = await call("test_model_profile", saved.profile.name);
+      if (result.profile) {
+        bootstrap.profiles = bootstrap.profiles.map(profile => profile.name === result.profile.name ? result.profile : profile);
+      }
+      modelCapabilities.set(saved.profile.name, result.vision_status || "unknown");
+      updateCapabilityHint();
       verifiedProfiles.add(saved.profile.name);
-      statusText = `连接正常，可以开始识别。数据发送至：${result.hostname}。连接验证不代表报告分析质量已验证。`;
+      statusText = "连接正常，可以开始识别。";
       statusState = "ready";
     } catch (error) {
       statusText = safeError(error); statusState = "error";

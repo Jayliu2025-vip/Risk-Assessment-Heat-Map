@@ -32,6 +32,29 @@ def evidence(*blocks: tuple[str, str]) -> str:
 
 
 class ModelClientTests(unittest.TestCase):
+    def test_vision_probe_requires_reading_a_synthetic_image(self):
+        requests = []
+        def respond(request):
+            requests.append(json.loads(request.content))
+            return httpx.Response(200, stream=httpx.ByteStream(b'{"choices":[{"message":{"content":"777777"}}]}'))
+        with ModelClient(profile("https://model.example.test"), "synthetic-key") as client:
+            client._client.close()
+            client._client = httpx.Client(transport=httpx.MockTransport(respond))
+            with patch("secrets.choice", return_value="7"):
+                self.assertIs(client.detect_vision_support(), True)
+        content = requests[0]["messages"][0]["content"]
+        self.assertNotIn("777777", content[0]["text"])
+        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    def test_vision_probe_distinguishes_rejected_images_from_uncertain_results(self):
+        for status, content, expected in ((400, "bad image", False), (429, "limited", None),
+                                           (200, "I cannot see an image", None)):
+            with self.subTest(status=status), ModelClient(profile("https://model.example.test"), "synthetic-key") as client:
+                client._client.close()
+                client._client = httpx.Client(transport=httpx.MockTransport(lambda request:
+                    httpx.Response(status, stream=httpx.ByteStream(json.dumps({"choices":[{"message":{"content":content}}]}).encode()))))
+                self.assertIs(client.detect_vision_support(), expected)
+
     def test_fake_server_receives_only_minimal_projected_risk_catalog(self):
         private_values = ("PRIVATE OWNER", "PRIVATE RATIONALE", "PRIVATE CONTROL")
         full_catalog = [{"risk_id": "R003", "name": "虚构资金支付风险", "domain": "资金活动",

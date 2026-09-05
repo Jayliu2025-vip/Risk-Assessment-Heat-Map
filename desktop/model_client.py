@@ -6,6 +6,8 @@ import base64
 import ipaddress
 import json
 import re
+import secrets
+from io import BytesIO
 from collections.abc import Iterable, Mapping
 from itertools import islice
 from pathlib import Path
@@ -370,3 +372,31 @@ class ModelClient:
         if not isinstance(content, str) or content.strip() != "OK":
             raise _error("MODEL_OUTPUT_INVALID")
         return True
+
+    def detect_vision_support(self) -> bool | None:
+        """Probe this exact model with an in-memory image, never a user report.
+
+        True requires reading a random code that appears only in the pixels.
+        False means the image request was rejected; transient or ambiguous
+        responses remain unknown so text-only use can still proceed.
+        """
+        from PIL import Image, ImageDraw, ImageFont
+
+        challenge = "".join(secrets.choice("23456789") for _ in range(6))
+        with Image.new("RGB", (240, 80), "white") as picture, BytesIO() as buffer:
+            ImageDraw.Draw(picture).text((15, 15), challenge, font=ImageFont.load_default(size=40), fill="black")
+            picture.save(buffer, format="PNG")
+            data_url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+        payload = {"model": self.profile.model, "temperature": 0, "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "请读出图片中的6位数字，只返回数字。"},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ]}]}
+        previous_timeout = self._client.timeout
+        try:
+            self._client.timeout = httpx.Timeout(20, connect=10)
+            content = self._response_content(self._request(payload))
+            return True if isinstance(content, str) and content.strip() == challenge else None
+        except ModelError as exc:
+            return False if exc.code == "MODEL_REQUEST_REJECTED" else None
+        finally:
+            self._client.timeout = previous_timeout
