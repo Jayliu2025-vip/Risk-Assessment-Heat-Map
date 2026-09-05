@@ -16,7 +16,7 @@
 - Modify: `tests/test_desktop_documentation.py`
 - Test: `tests/test_desktop_documentation.py`
 
-- [ ] **Step 1: Add a failing user-first README contract test**
+- [x] **Step 1: Add a failing user-first README contract test**
 
 Add `test_readme_is_user_first_current_and_free_of_private_publishing_content`. Read `README.md` as UTF-8 and assert that it contains all of these phrases:
 
@@ -48,7 +48,7 @@ forbidden = (
 )
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails on the old README**
+- [x] **Step 2: Run the focused test and verify it fails on the old README**
 
 Run:
 
@@ -64,7 +64,7 @@ Expected: failure because the old README still recommends loading the built-in s
 - Modify: `README.md`
 - Test: `tests/test_desktop_documentation.py`
 
-- [ ] **Step 1: Replace the README with the approved user-first structure**
+- [x] **Step 1: Replace the README with the approved user-first structure**
 
 Write the sections in this exact order:
 
@@ -90,7 +90,7 @@ Use only repository-relative links:
 
 State the verified test status exactly as `249 项 Python 测试` and `7 项 Playwright 流程`. Keep clean-machine/no-Python and physical-disconnect checks marked as outstanding.
 
-- [ ] **Step 2: Run the complete documentation contract**
+- [x] **Step 2: Run the complete documentation contract**
 
 Run:
 
@@ -107,7 +107,7 @@ Expected: 3 tests pass.
 - Modify: `README.md`
 - Modify: `tests/test_desktop_documentation.py`
 
-- [ ] **Step 1: Validate Markdown, links and private-content exclusions**
+- [x] **Step 1: Validate Markdown, links and private-content exclusions**
 
 Run:
 
