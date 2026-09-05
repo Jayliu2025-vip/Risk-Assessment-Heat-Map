@@ -19,8 +19,8 @@ class DesktopDocumentationTests(unittest.TestCase):
             "报告日期",
             "为同一风险的两条证据",
             "不会复制原始报告",
-            "250 项 Python 测试",
-            "7 项 Playwright",
+            "262 项 Python 测试",
+            "13 项 Playwright",
         )
         forbidden = (
             "点「载入内置示例」",

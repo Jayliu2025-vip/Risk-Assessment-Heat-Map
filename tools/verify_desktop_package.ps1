@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$DistPath, [string]$InstallerPath)
+param([string]$DistPath, [string]$InstallerPath, [switch]$FunctionsOnly)
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -107,7 +107,7 @@ function Test-DirectoryAbsentOrEmpty([string]$Path) {
 
 function Invoke-BoundedInstaller([string]$Exe, [string[]]$Arguments, [string]$Phase, [string]$LogPath, [string]$InstallRoot, [scriptblock]$CompletionProbe) {
     $baselineProcessIds = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $Exe } | ForEach-Object { [int]$_.ProcessId })
-    $process = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
+    $process = Start-Process -FilePath $Exe -ArgumentList $Arguments -WindowStyle Hidden -PassThru
     try {
         $deadline = (Get-Date).AddSeconds(300)
         while ((Get-Date) -lt $deadline) {
@@ -131,6 +131,11 @@ function Test-InnoLog([string]$LogPath, [string]$SuccessMarker) {
         return $body.Contains($SuccessMarker) -and $body.Contains('Log closed.')
     } catch { return $false }
 }
+
+if ($FunctionsOnly) { return }
+
+$existingInstallationKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F4B850A3-50D4-4EB2-BE7D-1EFBF77A1DAB}_is1'
+if (Test-Path -LiteralPath $existingInstallationKey) { throw 'EXISTING_INSTALLATION_USE_DISPOSABLE_WINDOWS_ACCOUNT' }
 
 Invoke-ExactSmoke $OnedirExe
 Write-Output "ONEDIR_SHA256 $((Get-FileHash -LiteralPath $OnedirExe -Algorithm SHA256).Hash)"

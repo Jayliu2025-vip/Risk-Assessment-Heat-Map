@@ -1,11 +1,14 @@
 ; Per-user installer only. It distributes the complete PyInstaller onedir output.
 #define AppName "Risk Assessment Heat Map"
 #define AppExeName "RiskAssessmentHeatMap.exe"
+#ifndef DistRoot
+  #define DistRoot SourcePath + "\..\dist\RiskAssessmentHeatMap"
+#endif
 
 [Setup]
 AppId={{F4B850A3-50D4-4EB2-BE7D-1EFBF77A1DAB}
 AppName={#AppName}
-AppVersion=1.0
+AppVersion=1.2.1
 DefaultDirName={localappdata}\Programs\RiskAssessmentHeatMap
 DefaultGroupName=Risk Assessment Heat Map
 DisableProgramGroupPage=yes
@@ -19,13 +22,21 @@ UninstallDisplayIcon={app}\{#AppExeName}
 ; Inno Setup creates unins000.exe in {app} and the Windows uninstall entry.
 
 [Files]
-Source: "{#SourcePath}\..\dist\RiskAssessmentHeatMap\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#DistRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Embedded prerequisite only. It is extracted to {tmp} and separately elevated when required.
 Source: "{#SourcePath}\cache\VC_redist.x64-14.50.35719.exe"; Flags: dontcopy
 
+[InstallDelete]
+; Only obsolete packaged libraries: preserve application state and report directories.
+Type: filesandordirs; Name: "{app}\_internal\matplotlib"
+Type: filesandordirs; Name: "{app}\_internal\contourpy"
+Type: filesandordirs; Name: "{app}\_internal\kiwisolver"
+Type: filesandordirs; Name: "{app}\_internal\dateutil"
+Type: files; Name: "{app}\_internal\cv2\opencv_videoio_ffmpeg*.dll"
+
 [Icons]
-Name: "{autoprograms}\Risk Assessment Heat Map"; Filename: "{app}\{#AppExeName}"
-Name: "{autoprograms}\Risk Assessment Heat Map\Uninstall Risk Assessment Heat Map"; Filename: "{uninstallexe}"
+Name: "{group}\Risk Assessment Heat Map"; Filename: "{app}\{#AppExeName}"
+Name: "{group}\Uninstall Risk Assessment Heat Map"; Filename: "{uninstallexe}"
 
 [Code]
 function WebView2RuntimeInstalled: Boolean;

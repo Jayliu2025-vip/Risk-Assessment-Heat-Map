@@ -142,8 +142,8 @@ class ReleaseConsistencyTests(unittest.TestCase):
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, manual)
-        self.assertIn("250 项 Python 测试", readme)
-        self.assertIn("7 项 Playwright 流程", readme)
+        self.assertIn("262 项 Python 测试", readme)
+        self.assertIn("13 项 Playwright 流程", readme)
         self.assertIn("Σ(wᵢ×维度ᵢ)/Σ(已评分维度的wᵢ)", readme)
         self.assertIn("八个权重输入框", manual)
         self.assertIn("参数配置页 B11 合计格", manual)

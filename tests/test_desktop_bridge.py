@@ -179,6 +179,48 @@ class DesktopBridgeTests(unittest.TestCase):
         self.assertEqual(old.base_url, "https://model.example.test")
         self.assertNotIn("sk-new", str(result))
 
+    def test_profile_edit_can_keep_key_only_for_same_endpoint(self):
+        self.bridge.save_model_profile(self.profile())
+        edited = {**self.profile(), "model": "another-model", "api_key": "", "base_url": "https://model.example.test/v1/"}
+        self.assertTrue(self.bridge.save_model_profile(edited)["ok"])
+        self.assertEqual(self.bridge._credential_store.get_api_key("synthetic"), "sk-synthetic-secret")
+        edited["base_url"] = "https://different.example.test/v1"
+        result = self.bridge.save_model_profile(edited)
+        self.assertEqual(result["code"], "MODEL_KEY_REENTRY_REQUIRED")
+        self.assertNotIn("different.example.test", self.store.list_model_profiles()[0].base_url)
+
+    def test_new_profile_without_key_is_not_saved(self):
+        result = self.bridge.save_model_profile({**self.profile(), "api_key": "  "})
+        self.assertEqual(result["code"], "MODEL_CREDENTIAL_NOT_FOUND")
+        self.assertEqual(self.store.list_model_profiles(), [])
+
+    def test_invalid_profile_address_does_not_store_credentials(self):
+        result = self.bridge.save_model_profile({**self.profile(), "base_url": "https://user:secret@example.test"})
+        self.assertFalse(result["ok"])
+        self.assertEqual(self.store.list_model_profiles(), [])
+        self.assertIsNone(self.bridge._credential_store.get_api_key("synthetic"))
+
+    def test_safe_model_errors_keep_category_but_never_exception_text(self):
+        from desktop.bridge import _safe_error
+        from desktop.model_client import ModelError
+        for code in ("MODEL_AUTH_FAILED", "MODEL_TIMEOUT", "MODEL_RATE_LIMIT"):
+            result = _safe_error(ModelError(code, "sk-secret C:/private/report.pdf 完整报告正文"))
+            self.assertEqual(result["code"], code)
+            self.assertNotIn("sk-secret", str(result))
+            self.assertNotIn("report.pdf", str(result))
+        result = _safe_error(ModelError("sk-secret", "secret"))
+        self.assertEqual(result["code"], "MODEL_ERROR")
+
+    def test_failed_retest_revokes_previous_verification(self):
+        from desktop.model_client import ModelError
+        self.bridge.save_model_profile(self.profile())
+        self.bridge.test_model_profile("synthetic")
+        self.bridge._model_client_factory = lambda *_: (_ for _ in ()).throw(ModelError("MODEL_AUTH_FAILED", "secret"))
+        self.assertFalse(self.bridge.test_model_profile("synthetic")["ok"])
+        report = self.select(self.report)["selection_token"]
+        workbook = self.select(self.workbook, "workbook")["selection_token"]
+        self.assertEqual(self.bridge.start_analysis(report, workbook, "2026H1", "synthetic")["code"], "MODEL_PROFILE_TEST_REQUIRED")
+
     def test_start_task_findings_are_serializable_and_never_source_path(self):
         self.bridge.save_model_profile(self.profile())
         self.bridge.test_model_profile("synthetic")

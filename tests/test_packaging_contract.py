@@ -19,6 +19,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagingContractTests(unittest.TestCase):
+    def test_installer_has_desktop_patch_version(self):
+        script = (ROOT / "packaging" / "RiskAssessmentHeatMap.iss").read_text(encoding="utf-8")
+        self.assertIn("AppVersion=1.2.1", script)
+
+    def test_upgrade_cleanup_is_limited_to_removed_vendor_components(self):
+        script = (ROOT / "packaging" / "RiskAssessmentHeatMap.iss").read_text(encoding="utf-8")
+        self.assertIn("[InstallDelete]", script)
+        section = script.split("[InstallDelete]", 1)[1].split("\n[", 1)[0]
+        import re
+        paths = set(re.findall(r'Name: "([^"]+)"', section))
+        self.assertEqual(paths, {
+            r"{app}\_internal\matplotlib", r"{app}\_internal\contourpy",
+            r"{app}\_internal\kiwisolver", r"{app}\_internal\dateutil",
+            r"{app}\_internal\cv2\opencv_videoio_ffmpeg*.dll",
+        })
+
     def test_pyinstaller_spec_declares_onedir_resources_hidden_imports_and_exclusions(self):
         spec = (ROOT / "packaging" / "risk_heatmap_desktop.spec").read_text(encoding="utf-8")
         for required in (
@@ -92,6 +108,8 @@ class PackagingContractTests(unittest.TestCase):
 
     def test_verifier_bounds_installer_and_uninstaller_and_captures_logs(self):
         script = (ROOT / "tools" / "verify_desktop_package.ps1").read_text(encoding="utf-8")
+        self.assertIn("EXISTING_INSTALLATION_USE_DISPOSABLE_WINDOWS_ACCOUNT", script)
+        self.assertLess(script.index("EXISTING_INSTALLATION_USE_DISPOSABLE_WINDOWS_ACCOUNT"), script.index("Invoke-ExactSmoke $OnedirExe"))
         self.assertNotIn("& $InstallerPath", script)
         self.assertNotIn("& $uninstaller", script)
         self.assertIn("AddSeconds(300)", script)

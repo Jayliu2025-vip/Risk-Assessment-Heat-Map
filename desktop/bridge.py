@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from .catalog import CatalogError, CatalogStore
 from .extraction import (ExtractionError, MAX_PDF_PAGES, MAX_RENDER_PIXELS, MAX_SOURCE_BYTES,
                          PDF_RENDER_SCALE, extract_docx_source_text)
-from .model_client import ModelError
+from .model_client import ModelError, normalize_endpoint, safe_model_error
 from .models import AnalysisTask, ConfirmedControl, FindingDraft, ModelProfile, RiskDecision, ValidationError
 from tools.common import DIMS, load_dataset
 from .workbook_writer import load_current_controls, load_risk_catalog
@@ -76,7 +76,7 @@ def _safe_error(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, ValidationError):
         return {"ok": False, "code": "VALIDATION_ERROR", "message": "提交内容不符合要求"}
     if isinstance(exc, ModelError):
-        return {"ok": False, "code": "MODEL_ERROR", "message": "模型服务请求失败"}
+        return safe_model_error(exc.code)
     if isinstance(exc, ExtractionError):
         return {"ok": False, "code": "EXTRACTION_ERROR", "message": "报告解析失败"}
     if isinstance(exc, KeyError):
@@ -171,14 +171,18 @@ class DesktopBridge:
     def _profile_payload(value: Any) -> tuple[ModelProfile, str]:
         if not isinstance(value, Mapping):
             raise ValidationError("模型配置必须是对象")
+        for field, label in (("name", "配置名称"), ("base_url", "服务地址"), ("model", "模型名称")):
+            if not isinstance(value.get(field), str) or not value[field].strip():
+                raise _BridgeError("MODEL_FIELD_REQUIRED", f"请填写{label}。")
+        normalize_endpoint(value["base_url"])
         profile = ModelProfile(
             name=value.get("name"), base_url=value.get("base_url"), model=value.get("model"),
             supports_vision=value.get("supports_vision"),
         )
-        key = value.get("api_key")
-        if not isinstance(key, str) or not key.strip():
-            raise ValidationError("api_key不能为空")
-        return profile, key
+        key = value.get("api_key", "")
+        if not isinstance(key, str):
+            raise _BridgeError("MODEL_CREDENTIAL_NOT_FOUND", "请粘贴 API 密钥。")
+        return profile, key.strip()
 
     def _get_profile(self, name: Any) -> ModelProfile:
         if not isinstance(name, str) or not name.strip():
@@ -515,6 +519,12 @@ class DesktopBridge:
         with self._profile_lock:
             previous = next((item for item in self._store.list_model_profiles() if item.name == checked.name), None)
             old_key = self._credential_store.get_api_key(checked.name)
+            if not key:
+                if previous is None or not old_key:
+                    raise _BridgeError("MODEL_CREDENTIAL_NOT_FOUND", "请粘贴 API 密钥；可通过“如何获取密钥”查看步骤。")
+                if normalize_endpoint(previous.base_url) != normalize_endpoint(checked.base_url):
+                    raise _BridgeError("MODEL_KEY_REENTRY_REQUIRED", "服务地址已改变，请重新粘贴该服务的密钥。")
+                key = old_key
             self._credential_store.set_api_key(checked.name, key)
             try:
                 self._store.save_model_profile(checked)
@@ -531,6 +541,7 @@ class DesktopBridge:
     def test_model_profile(self, profile_name: Any) -> dict[str, Any]:
         with self._profile_lock:
             profile = self._get_profile(profile_name)
+            self._tested_profiles.pop(profile.name, None)
             key = self._credential_store.get_api_key(profile.name)
             if not key:
                 raise _BridgeError("MODEL_CREDENTIAL_NOT_FOUND", "未找到模型密钥")

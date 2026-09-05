@@ -11,6 +11,7 @@ test.describe('desktop report catalog ingestion', () => {
         get_bootstrap: async () => ({profiles:[{name:'合成模型',base_url:'https://model.example.test',model:'synthetic',supports_vision:false}],domains,dimensions:dims,dimension_labels:{},workspace:{schema_version:1,entity_id:'ENT-1',entity_name:'虚构主体甲',created_at:'2026-09-04T08:00:00Z'},catalog_root:'C:/synthetic/catalog',catalog_reports:[],capabilities:{desktop:true,source_preview:true,report_catalog:true}}),
         choose_report: async purpose => purpose==='report'?{selection_token:'REPORT',basename:'synthetic.pdf',purpose}:{selection_token:'WORKBOOK',basename:'register.xlsx',purpose},
         test_model_profile: async () => ({hostname:'model.example.test'}),
+        save_model_profile: async ({api_key, ...profile}) => ({profile}),
         start_analysis: async (report,book,period,profile) => {
           if(report!=='REPORT'||book!=='WORKBOOK'||period!=='CATALOG'||profile!=='合成模型') throw {code:'BINDING_INVALID'};
           return {task:{task_id:'TASK-1',file_name:'synthetic.pdf',file_hash:'a'.repeat(64),created_at:'2026-09-04T08:00:00Z',status:'提取中',model_profile:profile,extraction_method:'text'},risk_catalog:[{risk_id:'R001',name:'供应商准入风险',domain:'采购与外包',description:'虚构风险',owner_dept:'采购部'}],period};
@@ -34,8 +35,9 @@ test.describe('desktop report catalog ingestion', () => {
     await page.locator('#report-title').fill('采购管理专项审计报告');
     await page.getByRole('button',{name:'选择报告',exact:true}).click();
     await page.getByRole('button',{name:'选择风险目录工作簿'}).click();
-    await page.locator('#report-step-upload details summary').click();
-    await page.getByRole('button',{name:'测试连接'}).click();
+    await page.locator('#model-settings > summary').click();
+    await page.getByRole('button',{name:'保存并验证'}).click();
+    await expect(page.locator('#model-status')).toContainText('连接正常');
     await page.getByRole('button',{name:'开始本地提取与识别'}).click();
     await expect(page.locator('[data-finding-id]')).toHaveCount(2);
     await page.getByRole('button',{name:'接受并下一条'}).click();

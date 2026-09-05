@@ -104,7 +104,7 @@ class ModelClientTests(unittest.TestCase):
         self.assertEqual(normalize_endpoint("http://127.0.0.1"), "http://127.0.0.1/v1/chat/completions")
         self.assertEqual(normalize_endpoint("http://127.255.255.255/v1"), "http://127.255.255.255/v1/chat/completions")
         self.assertEqual(normalize_endpoint("http://[::1]/v1"), "http://[::1]/v1/chat/completions")
-        for url in ("ftp://localhost", "https://user:pass@localhost", "https://localhost/", "https://localhost/v1/x", "https://localhost?q=x", "https://localhost#x"):
+        for url in ("ftp://localhost", "https://user:pass@localhost", "https://localhost/v1/x", "https://localhost?q=x", "https://localhost#x"):
             with self.assertRaises(ModelError) as raised:
                 normalize_endpoint(url)
             self.assertEqual(raised.exception.code, "MODEL_CONNECTION_FAILED")
@@ -113,6 +113,40 @@ class ModelClientTests(unittest.TestCase):
             with self.assertRaises(ModelError) as raised:
                 normalize_endpoint(url)
             self.assertEqual(raised.exception.code, "MODEL_URL_INSECURE")
+
+    def test_endpoint_accepts_pasted_base_and_completion_urls(self):
+        for path in ("", "/", "/v1", "/v1/", "/v1/chat/completions", "/v1/chat/completions/"):
+            self.assertEqual(normalize_endpoint("https://model.example.test" + path),
+                             "https://model.example.test/v1/chat/completions")
+        for prefix in ("/compatible-mode/v1", "/api/v1"):
+            for suffix in ("", "/", "/chat/completions", "/chat/completions/"):
+                self.assertEqual(normalize_endpoint("https://model.example.test" + prefix + suffix),
+                                 "https://model.example.test" + prefix + "/chat/completions")
+        for path in ("/../v1", "/api//v1", "/%2e%2e/v1", "/api\\v1"):
+            with self.assertRaises(ModelError):
+                normalize_endpoint("https://model.example.test" + path)
+
+    def test_glm_v4_endpoint_is_preserved(self):
+        for suffix in ("", "/", "/chat/completions", "/chat/completions/"):
+            self.assertEqual(normalize_endpoint("https://open.bigmodel.cn/api/paas/v4" + suffix),
+                             "https://open.bigmodel.cn/api/paas/v4/chat/completions")
+
+    def test_kimi_sampling_uses_provider_defaults_for_test_and_analysis(self):
+        for hostname in ("api.moonshot.cn", "api.moonshot.ai"):
+            with ModelClient(ModelProfile("kimi", f"https://{hostname}/v1", "kimi-k2.5", False), "synthetic-key") as client:
+                client._client.close()
+                requests = []
+                def respond(request):
+                    payload = json.loads(request.content)
+                    requests.append(payload)
+                    content = "OK" if len(requests) == 1 else '{"findings":[]}'
+                    return httpx.Response(200, stream=httpx.ByteStream(json.dumps({"choices":[{"message":{"content":content}}]}).encode()))
+                client._client = httpx.Client(transport=httpx.MockTransport(respond))
+                client.test_connection()
+                client.analyze("synthetic-task", evidence(("1", "虚构审计测试文字")), catalog(), [])
+                self.assertEqual(len(requests), 2)
+                for payload in requests:
+                    self.assertNotIn("temperature", payload)
 
     def test_error_codes_for_transport_and_response_failures(self):
         cases = (("invalid_json", "MODEL_JSON_INVALID"), ("auth_failed", "MODEL_AUTH_FAILED"), ("rate_limit", "MODEL_RATE_LIMIT"), ("oversized_response", "MODEL_RESPONSE_TOO_LARGE"))
@@ -137,6 +171,20 @@ class ModelClientTests(unittest.TestCase):
                 with self.assertRaises(ModelError) as raised:
                     client.analyze("T-1", evidence(("1", "虚构付款审批记录")), catalog(), [])
         self.assertEqual(raised.exception.code, "MODEL_RESPONSE_TOO_LARGE")
+
+    def test_http_errors_are_actionable_without_echoing_remote_details(self):
+        for status, code in ((400, "MODEL_REQUEST_REJECTED"), (402, "MODEL_BALANCE_REQUIRED"),
+                             (404, "MODEL_NOT_FOUND"), (422, "MODEL_REQUEST_REJECTED"),
+                             (503, "MODEL_SERVICE_UNAVAILABLE")):
+            with self.subTest(status=status), ModelClient(profile("https://model.example.test"), "synthetic-key") as client:
+                client._client.close()
+                client._client = httpx.Client(transport=httpx.MockTransport(
+                    lambda request: httpx.Response(status, content=b'{"error":"sk-secret report.pdf"}')))
+                with self.assertRaises(ModelError) as raised:
+                    client.test_connection()
+                self.assertEqual(raised.exception.code, code)
+                self.assertNotIn("sk-secret", str(raised.exception))
+                self.assertNotIn("report.pdf", str(raised.exception))
 
     def test_timeout_maps_to_safe_code(self):
         with FakeOpenAIServer(mode="timeout") as server:

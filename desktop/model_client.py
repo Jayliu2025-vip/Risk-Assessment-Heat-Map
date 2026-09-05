@@ -39,10 +39,14 @@ class ModelError(RuntimeError):
 
 
 _SAFE_MESSAGES = {
-    "MODEL_AUTH_FAILED": "模型鉴权失败，请检查已保存的密钥。",
-    "MODEL_RATE_LIMIT": "模型服务请求过于频繁，请稍后重试。",
-    "MODEL_TIMEOUT": "模型服务响应超时，请稍后重试。",
+    "MODEL_AUTH_FAILED": "密钥无效或没有调用权限，请重新粘贴密钥并检查模型权限。",
+    "MODEL_RATE_LIMIT": "请求受限，请稍后重试；若持续出现，请检查服务商的额度与调用限制。",
+    "MODEL_TIMEOUT": "连接超时，请检查网络后重试，或换一个响应更快的模型。",
     "MODEL_CONNECTION_FAILED": "无法连接模型服务，请检查模型地址和网络。",
+    "MODEL_NOT_FOUND": "接口或模型不存在，请检查服务地址及模型名称。",
+    "MODEL_REQUEST_REJECTED": "服务商不接受当前请求，请检查模型是否支持聊天接口及当前调用参数。",
+    "MODEL_BALANCE_REQUIRED": "服务商要求检查账户余额或计费状态，请前往服务商控制台处理。",
+    "MODEL_SERVICE_UNAVAILABLE": "模型服务暂时不可用，请稍后重试。",
     "MODEL_URL_INSECURE": "模型服务地址不安全，请使用 HTTPS。",
     "MODEL_RESPONSE_ENCODING_UNSUPPORTED": "模型服务返回了不支持的响应编码。",
     "MODEL_JSON_INVALID": "模型服务返回的 JSON 无法解析。",
@@ -51,6 +55,13 @@ _SAFE_MESSAGES = {
     "MODEL_RESPONSE_TOO_LARGE": "模型响应超过安全限制。",
     "MODEL_INPUT_INVALID": "输入证据格式无效。",
 }
+
+
+def safe_model_error(code: str) -> dict[str, Any]:
+    """Expose only locally defined categories and text, never remote diagnostics."""
+    if code not in _SAFE_MESSAGES:
+        return {"ok": False, "code": "MODEL_ERROR", "message": "模型服务请求失败，请检查配置后重试。"}
+    return {"ok": False, "code": code, "message": _SAFE_MESSAGES[code]}
 
 
 def _error(code: str) -> ModelError:
@@ -101,7 +112,7 @@ def serialize_evidence_blocks(blocks: Iterable[Any]) -> str:
 
 
 def normalize_endpoint(base_url: str) -> str:
-    """Allow only an origin or exact /v1 base, without retaining credentials."""
+    """Normalize versioned compatible bases and pasted completion endpoints."""
     if not isinstance(base_url, str) or not base_url.strip():
         raise _error("MODEL_CONNECTION_FAILED")
     try:
@@ -113,12 +124,17 @@ def normalize_endpoint(base_url: str) -> str:
         raise _error("MODEL_CONNECTION_FAILED") from None
     if (parsed.scheme not in ("http", "https") or not hostname or parsed.username is not None
             or parsed.password is not None or parsed.query or parsed.fragment or parsed.params
-            or parsed.path not in ("", "/v1")):
+            or re.search(r"[\s\\\\%]", base_url.strip())):
+        raise _error("MODEL_CONNECTION_FAILED")
+    path = parsed.path.rstrip("/")
+    if path.endswith("/chat/completions"):
+        path = path[:-len("/chat/completions")]
+    if path and (not re.fullmatch(r"(?:/[A-Za-z0-9_-]+)*/v[1-9][0-9]*", path)):
         raise _error("MODEL_CONNECTION_FAILED")
     if parsed.scheme == "http":
         if not _is_loopback_hostname(hostname):
             raise _error("MODEL_URL_INSECURE")
-    return urlunparse((parsed.scheme, parsed.netloc, "/v1/chat/completions", "", "", ""))
+    return urlunparse((parsed.scheme, parsed.netloc, (path or "/v1") + "/chat/completions", "", "", ""))
 
 
 def _content_json(content: Any) -> dict[str, Any]:
@@ -231,6 +247,10 @@ class ModelClient:
         return paths
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Kimi's current models constrain sampling; GLM also defines its own
+        # defaults. Do not force the generic temperature=0 onto these APIs.
+        if urlparse(self.endpoint).hostname in {"api.moonshot.cn", "api.moonshot.ai", "open.bigmodel.cn", "api.z.ai"}:
+            payload = {key: value for key, value in payload.items() if key != "temperature"}
         headers = {"Authorization": f"Bearer {self._api_key}", "Accept-Encoding": "identity"}
         try:
             with self._client.stream("POST", self.endpoint, headers=headers, json=payload) as response:
@@ -238,6 +258,14 @@ class ModelClient:
                     raise _error("MODEL_AUTH_FAILED")
                 if response.status_code == 429:
                     raise _error("MODEL_RATE_LIMIT")
+                if response.status_code == 402:
+                    raise _error("MODEL_BALANCE_REQUIRED")
+                if response.status_code == 404:
+                    raise _error("MODEL_NOT_FOUND")
+                if response.status_code in (400, 422):
+                    raise _error("MODEL_REQUEST_REJECTED")
+                if response.status_code >= 500:
+                    raise _error("MODEL_SERVICE_UNAVAILABLE")
                 if response.status_code < 200 or response.status_code >= 300:
                     raise _error("MODEL_CONNECTION_FAILED")
                 encoding = response.headers.get("Content-Encoding")

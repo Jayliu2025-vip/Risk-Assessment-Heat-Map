@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import html
+import os
 from pathlib import Path
 import threading
 from typing import Any, Callable
+
+# Excel loading can import NumPy/OpenBLAS before OCR is needed. A desktop
+# audit workflow does not need one BLAS worker per CPU; keep its default
+# thread buffers small, while respecting an explicit administrator setting.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 if __package__ in {None, ""}:  # PyInstaller executes this entrypoint as a script.
     import sys

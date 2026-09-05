@@ -31,11 +31,16 @@ hiddenimports = [
     "webview.platforms.edgechromium",
     "webview.platforms.winforms",
     "keyring.backends.Windows",
+    # Keep the previously audited CPython/Tcl runtime closure intact.
+    "tkinter",
 ] + collect_submodules("rapidocr") + collect_submodules("keyring.backends")
 
 excludes = [
     "PyQt5", "PyQt6", "PySide2", "PySide6", "gtk", "gi", "cefpython3",
     "webview.platforms.qt", "webview.platforms.gtk", "webview.platforms.cef",
+    # Charts in the desktop application are rendered by the web UI. The
+    # Python plotting library remains available to standalone report scripts.
+    "matplotlib",
     "tests", "node_modules", "screenshots",
 ]
 
@@ -54,6 +59,8 @@ vc_runtime_prerequisite_dlls = {"msvcp140.dll", "msvcp140_1.dll"}
 a.binaries = [
     item for item in a.binaries
     if Path(item[0]).name.lower() not in vc_runtime_prerequisite_dlls
+    # The application reads still document pages, never video streams.
+    and not Path(item[0]).name.lower().startswith("opencv_videoio_ffmpeg")
 ]
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="RiskAssessmentHeatMap", console=False)

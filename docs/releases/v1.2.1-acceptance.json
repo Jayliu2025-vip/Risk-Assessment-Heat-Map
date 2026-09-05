@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "release": "v1.2.1",
+  "date": "2026-09-05",
+  "scope": "Current-host Windows x64, synthetic data only",
+  "passed": true,
+  "asset": {
+    "name": "RiskAssessmentHeatMap-Setup-v1.2.1-windows-x64.exe",
+    "bytes": 108066559,
+    "sha256": "1463f4f16b78014de978b02033ce75ea6276d2016d9de22225b91364a2717854"
+  },
+  "previous_installer_sha256": "be9673322fb6aada0bf5da0e4398fb477e8ddb58ac1daa407233cabfdcb55bff",
+  "phases": [
+    {
+      "status": "passed",
+      "state_and_credential": "preserved",
+      "smoke": "passed",
+      "version": "1.2.1",
+      "phase": "clean-install",
+      "shortcut": "present"
+    },
+    {
+      "status": "passed",
+      "program": "removed",
+      "state_and_credential": "preserved",
+      "registration": "removed",
+      "shortcuts": "removed",
+      "phase": "clean-uninstall"
+    },
+    {
+      "status": "passed",
+      "state_and_credential": "preserved",
+      "smoke": "passed",
+      "version": "1.0",
+      "phase": "previous-install",
+      "shortcut": "present"
+    },
+    {
+      "status": "passed",
+      "state_and_credential": "preserved",
+      "smoke": "passed",
+      "version": "1.2.1",
+      "phase": "upgrade",
+      "shortcut": "present"
+    },
+    {
+      "status": "passed",
+      "program": "removed",
+      "state_and_credential": "preserved",
+      "registration": "removed",
+      "shortcuts": "removed",
+      "phase": "upgrade-uninstall"
+    }
+  ],
+  "synthetic_credential_removed": true,
+  "existing_installation_modified": false,
+  "installed_files_sha256_verified": true,
+  "obsolete_libraries_removed_on_upgrade": true,
+  "python_tests": 262,
+  "browser_tests": 13,
+  "distribution_audit": "PACKAGED_DISTRIBUTION_AUDIT_OK detected=44 locked=58",
+  "limitations": [
+    "No clean-machine/no-Python test",
+    "No physical network-disconnection observation",
+    "Installer is not code-signed",
+    "No real paid model endpoint was called"
+  ]
+}

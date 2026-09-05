@@ -144,7 +144,28 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
           </div>
           <div class="desktop-actions"><button class="btn primary" id="report-choose" type="button">选择报告</button><span id="report-file-name">尚未选择</span><button class="btn" id="report-choose-workbook" type="button">选择风险目录工作簿</button><span id="report-workbook-name">尚未选择</span></div>
           <p id="report-model-summary" class="note"></p>
-          <details><summary>模型设置</summary><div class="report-form model-form"><label>名称<input id="model-name" type="text"></label><label>Base URL<input id="model-base-url" type="url"></label><label>模型<input id="model-model" type="text"></label><label>API Key<input id="model-api-key" type="password" autocomplete="new-password"></label><label class="model-vision"><input id="model-supports-vision" type="checkbox"> 支持视觉页面兜底</label></div><div class="desktop-actions"><button class="btn" id="model-save" type="button">保存模型设置</button><button class="btn" id="model-test" type="button">测试连接</button></div></details>
+          <details id="model-settings">
+            <summary>连接大模型 <span class="model-summary-hint">首次使用约需三步</span></summary>
+            <p class="note">选择服务商 → 粘贴 API 密钥 → 保存并验证。已有配置可直接验证后使用。</p>
+            <fieldset id="model-fields">
+              <div class="report-form model-form">
+                <label>1. 服务商<select id="model-provider"><option value="">请选择服务商</option><option value="deepseek">DeepSeek</option><option value="qwen-cn">阿里云百炼（中国大陆，按量付费）</option><option value="glm">GLM（智谱开放平台）</option><option value="kimi">Kimi（开放平台 API）</option><option value="custom">其他 / 自定义兼容接口</option></select></label>
+                <label>2. API 密钥<input id="model-api-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="粘贴服务商提供的 API 密钥" aria-describedby="model-key-help"></label>
+                <label>模型名称<input id="model-model" type="text" list="model-suggestions" placeholder="选择服务商后自动填写" spellcheck="false"><datalist id="model-suggestions"></datalist></label>
+                <div class="model-help"><span id="model-key-help">密钥保存在本机 Windows 凭据管理器中。</span><a id="model-key-link" target="_blank" rel="noopener noreferrer" hidden>如何获取密钥（官方指南）↗</a><span id="model-provider-help">请选择您已开通 API 服务的平台，或向单位管理员获取兼容接口配置。</span></div>
+              </div>
+              <details id="model-advanced"><summary>高级设置</summary><div class="report-form model-form">
+                <label>配置名称<input id="model-name" type="text" maxlength="120" placeholder="自动生成，可修改"></label>
+                <label>服务地址（Base URL）<input id="model-base-url" type="url" spellcheck="false" placeholder="例如 https://服务地址/v1"></label>
+                <label class="model-vision span2"><input id="model-supports-vision" type="checkbox"> 文字识别失败时，允许模型读取报告页图片</label>
+                <p class="note span2">仅在确认所选模型支持图片输入时开启。图片会发送到下方所示服务；连接验证不检测图片识别能力。</p>
+              </div></details>
+            </fieldset>
+            <p id="model-destination" class="note"></p>
+            <p class="note">验证仅发送一句测试文字，可能产生少量 API 费用。分析报告时会向所选服务发送必要的报告内容。</p>
+            <div class="desktop-actions"><button class="btn primary" id="model-save" type="button">保存并验证</button><button class="btn" id="model-new" type="button">新增配置</button></div>
+            <p id="model-status" class="model-status" role="status" aria-live="polite"></p>
+          </details>
           <button class="btn primary" id="report-start" type="button">开始本地提取与识别</button>
         </section>
         <section id="report-step-extract" class="desktop-card" hidden><h3>本地提取与识别</h3><p id="report-extraction-method">等待开始。</p><button class="btn" id="report-reselect" type="button">重新选择报告</button></section>
