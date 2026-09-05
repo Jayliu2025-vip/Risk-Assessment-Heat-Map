@@ -8,6 +8,36 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DesktopDocumentationTests(unittest.TestCase):
+    def test_readme_is_user_first_current_and_free_of_private_publishing_content(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        required = (
+            "审计报告到风险图谱",
+            "默认不加载示例",
+            "单主体",
+            "一份或多份报告",
+            "上传日期",
+            "报告日期",
+            "为同一风险的两条证据",
+            "不会复制原始报告",
+            "250 项 Python 测试",
+            "7 项 Playwright",
+        )
+        forbidden = (
+            "点「载入内置示例」",
+            "24 项评分模型测试",
+            "\u516c\u4f17\u53f7",
+            "\u5fae\u4fe1\u516c\u4f17\u53f7",
+            "\u0057\u0065\u0043\u0068\u0061\u0074",
+            ".private/",
+        )
+
+        for phrase in required:
+            with self.subTest(required=phrase):
+                self.assertIn(phrase, readme)
+        for phrase in forbidden:
+            with self.subTest(forbidden=phrase):
+                self.assertNotIn(phrase, readme)
+
     def test_readme_and_manual_publish_the_complete_scope_and_safety_boundary(self) -> None:
         documents = {
             "README": (ROOT / "README.md").read_text(encoding="utf-8"),
