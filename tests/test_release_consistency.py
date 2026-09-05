@@ -23,6 +23,25 @@ def read_text(relative_path):
 
 
 class ReleaseConsistencyTests(unittest.TestCase):
+    def test_scoring_anchor_release_artifacts_cannot_drift(self):
+        canonical = json.loads(read_text("data/scoring_anchors.json"))
+        self.assertEqual([group["key"] for group in canonical], ["likelihood", *common.DIMS])
+
+        script = read_text("web/scoring_anchors.js").strip()
+        prefix = "window.SCORING_ANCHORS = "
+        self.assertTrue(script.startswith(prefix))
+        self.assertEqual(json.loads(script[len(prefix):].removesuffix(";")), canonical)
+
+        build_source = read_text("tools/build_excel.py")
+        self.assertIn("load_scoring_anchors", build_source)
+        self.assertNotIn("blocks = [", build_source)
+
+        html = read_text("web/risk_heatmap.html")
+        self.assertIn('<script src="sample_data.js"></script>', html)
+        self.assertIn('<script src="scoring_anchors.js"></script>', html)
+        self.assertIn("SCORING_ANCHORS.map", html)
+        self.assertNotIn("const ANCHORS = [", html)
+
     def test_release_artifacts_share_v12_application_version(self):
         expected_version = "1.2"
 

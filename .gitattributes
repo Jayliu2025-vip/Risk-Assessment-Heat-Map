@@ -1,0 +1,2 @@
+tests/fixtures/generated/*.pdf -text -diff
+licenses/** -text -diff

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>审计风险评估热力图谱</title>
+<link rel="stylesheet" href="desktop_report.css">
 <style>
 :root{
   --extreme:#C00000;--high:#ED7D31;--medium:#FFC000;--low:#8EAADB;--minimal:#70AD47;
@@ -96,8 +97,78 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
     <select id="sel-compare"></select>
     <button id="btn-sample" class="no-print">载入内置示例</button>
     <button id="btn-print">打印 / 存 PDF</button>
+    <button id="desktop-report-nav" hidden>桌面报告复核</button>
   </div>
 </header>
+<section id="desktop-report-shell" hidden aria-label="单主体审计报告风险评估工作台">
+  <div class="desktop-app">
+    <header class="desktop-topbar">
+      <div class="desktop-brand"><span class="desktop-brand-mark">审</span><div><h1>审计风险评估工作台</h1><p>从审计报告形成可复核的风险图谱</p></div></div>
+      <div class="desktop-root"><span>信息目录</span><strong id="catalog-root-path">尚未设置</strong><button id="catalog-change-root" type="button">设置目录</button></div>
+    </header>
+    <aside class="desktop-sidebar" aria-label="桌面工作区">
+      <span class="desktop-nav-label">工作区</span>
+      <button class="desktop-nav active" data-desktop-view="catalog" type="button">▤　报告目录</button>
+      <button class="desktop-nav" data-desktop-view="review" type="button">✓　识别与复核</button>
+      <button class="desktop-nav" data-desktop-view="batch" type="button">⊞　风险评估批次</button>
+      <button class="desktop-nav" data-desktop-view="dashboard" id="desktop-dashboard-nav" type="button" disabled>▦　风险图谱</button>
+      <p class="desktop-sidebar-note">首版信息目录严格对应一个主体。<br>原始报告不会复制进信息目录。</p>
+    </aside>
+    <div class="desktop-workspace">
+      <div id="report-status" class="report-status" aria-live="polite"></div>
+
+      <section class="desktop-view active" id="desktop-view-catalog">
+        <div class="desktop-page-head"><div><h2>报告目录</h2><p id="catalog-entity-label">尚未设置被审计主体</p></div><div class="desktop-actions"><button class="btn" id="catalog-trash" type="button">回收站</button><button class="btn primary" id="catalog-add-report" type="button">＋ 添加审计报告</button></div></div>
+        <div class="desktop-card catalog-setup" id="catalog-workspace-setup" hidden>
+          <h3>设置单主体信息目录</h3><p>一个目录只服务一个被审计主体。产生报告信息后不能直接改换主体。</p>
+          <div class="catalog-setup-grid"><button class="btn" id="catalog-choose-root" type="button">选择信息目录</button><span id="catalog-root-selection">尚未选择</span><label>被审计主体<input id="catalog-entity-name" type="text" maxlength="120" placeholder="例如：虚构主体甲"></label><button class="btn primary" id="catalog-save-workspace" type="button">确认主体并启用目录</button></div>
+        </div>
+        <div id="catalog-ready" hidden>
+          <div class="desktop-card catalog-filters"><label>报告名称<input id="catalog-search" type="text" placeholder="搜索报告名称"></label><label>审计项目<select id="catalog-project-filter"><option value="">全部项目</option></select></label><label>上传日期<select id="catalog-date-filter"><option value="">全部日期</option></select></label><button class="btn" id="catalog-clear-filter" type="button">清除筛选</button></div>
+          <div class="desktop-card catalog-empty" id="catalog-empty"><h3>还没有可用于风险评估的报告</h3><p>添加报告并完成人工复核后，结构化信息才会进入目录。</p><button class="btn primary" id="catalog-empty-add" type="button">添加第一份审计报告</button><small>不会保存原始报告，也不会自动载入示例数据</small></div>
+          <div class="desktop-card catalog-table" id="catalog-table-wrap" hidden><table><thead><tr><th></th><th>上传日期</th><th>审计项目</th><th>报告名称</th><th>报告日期</th><th>版本</th><th>状态</th><th>发现</th><th>操作</th></tr></thead><tbody id="catalog-report-rows"></tbody></table></div>
+          <div class="catalog-danger"><button class="btn danger" id="catalog-clear-reports" type="button">清空报告列表</button></div>
+          <div class="catalog-selection" id="catalog-selection" hidden><strong id="catalog-selection-count">已选择 0 份报告</strong><span id="catalog-selection-tags"></span><button class="btn primary" id="catalog-create-batch" type="button">形成风险评估图谱</button></div>
+        </div>
+      </section>
+
+      <section class="desktop-view" id="desktop-view-review">
+        <div class="desktop-page-head"><div><h2>报告识别与复核</h2><p>逐条确认来源、事实和建议评分，模型结果不会自动进入风险图谱。</p></div><button class="btn" data-desktop-view="catalog" type="button">返回报告目录</button></div>
+        <nav class="report-steps" aria-label="报告处理步骤"><button id="report-tab-upload" class="report-step" aria-current="step" type="button">1 选择报告</button><button id="report-tab-extract" class="report-step" aria-current="false" type="button">2 本地提取</button><button id="report-tab-review" class="report-step" aria-current="false" type="button">3 复核审计发现</button><button id="report-tab-commit" class="report-step" aria-current="false" type="button">4 保存结构化信息</button></nav>
+        <section id="report-step-upload" class="desktop-card report-upload">
+          <div class="report-upload-grid">
+            <label>审计项目<input id="report-audit-project" type="text" maxlength="120" placeholder="选择已有项目或输入新项目"></label>
+            <label>报告名称<input id="report-title" type="text" maxlength="240" placeholder="默认使用原文件名"></label>
+            <label>报告日期（可选）<input id="report-date" type="date"></label>
+            <label>已保存模型<select id="report-model-profile"></select></label>
+          </div>
+          <div class="desktop-actions"><button class="btn primary" id="report-choose" type="button">选择报告</button><span id="report-file-name">尚未选择</span><button class="btn" id="report-choose-workbook" type="button">选择风险目录工作簿</button><span id="report-workbook-name">尚未选择</span></div>
+          <p id="report-model-summary" class="note"></p>
+          <details><summary>模型设置</summary><div class="report-form model-form"><label>名称<input id="model-name" type="text"></label><label>Base URL<input id="model-base-url" type="url"></label><label>模型<input id="model-model" type="text"></label><label>API Key<input id="model-api-key" type="password" autocomplete="new-password"></label><label class="model-vision"><input id="model-supports-vision" type="checkbox"> 支持视觉页面兜底</label></div><div class="desktop-actions"><button class="btn" id="model-save" type="button">保存模型设置</button><button class="btn" id="model-test" type="button">测试连接</button></div></details>
+          <button class="btn primary" id="report-start" type="button">开始本地提取与识别</button>
+        </section>
+        <section id="report-step-extract" class="desktop-card" hidden><h3>本地提取与识别</h3><p id="report-extraction-method">等待开始。</p><button class="btn" id="report-reselect" type="button">重新选择报告</button></section>
+        <section id="report-step-review" class="desktop-card report-review-shell" hidden>
+          <div class="report-panel"><h3>报告与发现</h3><div id="report-findings" class="report-findings" aria-label="发现列表"></div></div>
+          <div class="report-panel"><h3>来源页与关键摘录</h3><div id="report-source-viewer" class="report-source" tabindex="0">请选择一项发现。</div></div>
+          <div class="report-panel report-editor"><h3>人工复核</h3><div class="report-editor-scroll"><form id="report-finding-form" class="report-form" aria-label="审计发现复核表单" onsubmit="return false"><label class="span2">标题<input data-finding-field="title" type="text"></label><label class="span2">事实摘要<textarea data-finding-field="fact_summary"></textarea></label><label>来源页<input data-finding-field="source_page" type="text"></label><label>匹配风险 ID<input data-finding-field="matched_risk_id" type="text"></label><label class="span2">来源摘录<textarea data-finding-field="source_excerpt"></textarea></label><label>领域<select data-finding-field="domain"></select></label><label>可能性<input data-finding-field="likelihood" type="number" min="1" max="5"></label><div class="span2 report-dims"><label>经济损失<input data-finding-field="imp_financial" type="number" min="1" max="5"></label><label>合规法律<input data-finding-field="imp_compliance" type="number" min="1" max="5"></label><label>运营中断<input data-finding-field="imp_operation" type="number" min="1" max="5"></label><label>声誉舆情<input data-finding-field="imp_reputation" type="number" min="1" max="5"></label><label>舞弊风险<input data-finding-field="imp_fraud" type="number" min="1" max="5"></label><label>战略影响<input data-finding-field="imp_strategy" type="number" min="1" max="5"></label><label>数据安全<input data-finding-field="imp_data" type="number" min="1" max="5"></label><label>健康安全<input data-finding-field="imp_hse" type="number" min="1" max="5"></label></div><label class="span2">判断依据<textarea data-finding-field="rationale"></textarea></label><label>需人工复核<input data-finding-field="needs_review" type="checkbox"></label><label>复核状态<select data-finding-field="review_status"><option>待确认</option><option>已接受</option><option>已排除</option></select></label></form></div><div class="report-review-actions"><span id="report-review-state">待人工确认</span><button class="btn sm" id="report-split" type="button">拆分</button><button class="btn sm" id="report-merge" type="button">合并所选</button><button class="btn sm danger" id="report-exclude" type="button">排除</button><button class="btn sm primary" id="report-save" type="button">保存发现</button><button class="btn sm primary" id="report-accept" type="button">接受并下一条</button></div></div>
+        </section>
+        <div id="report-save-catalog-wrap" class="desktop-actions" hidden><button class="btn primary" id="report-save-catalog" type="button">保存到报告目录</button></div>
+      </section>
+
+      <section class="desktop-view" id="desktop-view-batch">
+        <div class="desktop-page-head"><div><h2>新建风险评估批次</h2><p>所选报告只提供历史证据，当前整改状态和控制措施仍需人工确认。</p></div><button class="btn" data-desktop-view="catalog" type="button">返回增删报告</button></div>
+        <div id="batch-report-tags" class="batch-report-tags"></div>
+        <section id="batch-setup" class="desktop-card batch-setup"><label>目标评估期间<input id="report-period" aria-label="目标评估期间" type="text" placeholder="例如 2026H2"></label><button class="btn" id="batch-choose-workbook" type="button">选择当前正式工作簿</button><span id="batch-workbook-name">尚未选择</span><button class="btn primary" id="batch-load-reports" type="button">载入所选报告</button></section>
+        <section id="batch-similar" class="desktop-card" hidden><h3>相似发现处理</h3><div id="batch-similar-findings"></div><button class="btn primary" id="batch-confirm-relations" type="button">确认发现关系并继续</button></section>
+        <section id="report-step-commit" class="desktop-card" hidden><h3>确认当前风险与控制</h3><p class="note">请重新确认当前可能性、影响、责任部门、整改状态和控制措施；历史发现不证明当前剩余风险。</p><div id="report-risk-decisions" class="report-form" aria-live="polite"></div><div id="report-current-controls" aria-live="polite"></div><label class="report-confirm"><input id="report-controls-confirmed" type="checkbox"> 已确认当前控制措施</label><div class="desktop-actions"><button class="btn" id="report-preview" type="button">载入控制点</button></div><div id="report-change-preview" class="report-preview" hidden><h3>变更预览</h3><ul id="report-preview-list"></ul><button class="btn primary" id="report-commit" type="button">确认并生成版本化工作簿</button></div></section>
+      </section>
+
+      <section class="desktop-view" id="desktop-view-dashboard"><div class="desktop-page-head"><div><h2 id="desktop-dashboard-title">风险图谱</h2><p>只展示已经完成人工复核并写入版本化工作簿的数据。</p></div><div id="desktop-dashboard-toolbar"></div></div><div id="desktop-dashboard-host"></div></section>
+    </div>
+  </div>
+</section>
+<div id="desktop-output" class="note" aria-live="polite"><span id="report-output-path"></span></div>
 <div id="print-head">
   <h1>内部审计风险评估热力图谱</h1>
   <div class="p" id="print-period"></div>
@@ -225,6 +296,7 @@ input.err{border-color:var(--extreme);background:#FFF5F5}
 </div>
 
 <script src="sample_data.js"></script>
+<script src="scoring_anchors.js"></script>
 <script>
 "use strict";
 const DIMS = ["imp_financial","imp_compliance","imp_operation","imp_reputation",
@@ -608,7 +680,6 @@ function boot(){
     state={...state,...restored,config:normalizeConfig(restored.config)};
   }catch(e){state.config=normalizeConfig(state.config);}}
   else state.config=normalizeConfig(state.config);
-  if(!periods().length&&window.SAMPLE_DATA) loadSample();
   renderSettings();renderAnchors();renderAll();
 }
 function loadSample(){
@@ -820,58 +891,12 @@ function showDetail(rid){
 }
 function $$(sel){return Array.from(document.querySelectorAll(sel));}
 
-const ANCHORS = [
-  ["发生可能性", [["1","同行业 5 年内无案例，控制健全且经测试","COSO ERM 2017"],
-    ["2","同行业偶发，本企业 3~5 年内无案例","—"],
-    ["3","本企业 1~2 年内发生过苗头或一般性问题","内审发现/监管通报"],
-    ["4","本企业年内已发生，或同行业高发","ACFE：年均约 5% 营收流失于舞弊"],
-    ["5","已多次发生或正在发生，控制基本失效","—"]]],
-  ["经济损失（国资委资产损失分级 + 493 号令）", [["1","<100 万元：未达“一般资产损失”","国资委办法（一般以下）"],
-    ["2","100~500 万元：一般资产损失","国资委办法"],
-    ["3","500~5000 万元：较大资产损失；较大事故损失区间","国资委办法；493 号令"],
-    ["4","5000 万~1 亿元：重大资产损失；重大事故量级","国资委办法；493 号令"],
-    ["5","≥1 亿元：特别重大事故量级，危及企业生存","493 号令第三条"]]],
-  ["合规法律（个保法/数安法/GDPR + 不良后果三档）", [["1","制度瑕疵，责令整改，无外部后果","—"],
-    ["2","责令限期整改；罚款 <100 万元","个保法第 66 条第一款"],
-    ["3","一般行政处罚 100~1000 万元；责任人被处分","数安法第 45 条"],
-    ["4","情节严重 1000~5000 万或营业额 5%（GDPR 顶格同档）","个保法第 66 条第二款；GDPR"],
-    ["5","刑事移送、停业/吊照；影响社会与国家层面","国资委重大不良后果；刑法/监察法"]]],
-  ["运营中断（493 号令事故等级 + ISO 22301 RTO）", [["1","局部受阻，当日恢复（RTO<8h）","ISO 22301"],
-    ["2","单部门中断，RTO 1~3 天","ISO 22301"],
-    ["3","跨部门中断，RTO 3~30 天；或“一般事故”","493 号令第三条"],
-    ["4","核心业务瘫痪 1~6 个月；或较大/重大事故量级","493 号令第三条"],
-    ["5","集团级瘫痪超 6 个月；或特别重大事故","493 号令第三条"]]],
-  ["声誉舆情（国资委不良后果三档 × 传播层级）", [["1","无外部感知，仅内部知晓","—"],
-    ["2","个别投诉、本地媒体报道，影响限于涉事企业","一般不良后果"],
-    ["3","行业内流传、省级媒体/监管通报","较大不良后果"],
-    ["4","全国性报道、上级通报批评、资本市场负面反应","较大~重大不良后果"],
-    ["5","国家级点名、社会舆论事件、行业整顿","重大不良后果"]]],
-  ["舞弊风险（ACFE 2024 基准 + 职务犯罪管辖）", [["1","无诱因，职责分离健全经测试，无案例","COSO；ISO 37001"],
-    ["2","一般诱因但控制可见；潜在损失 <100 万元","ACFE：中位 $14.5 万"],
-    ["3","诱因集中；潜在损失 100~500 万元","ACFE：75 分位 $75 万"],
-    ["4","诱因高危或有案例；潜在损失 500~5000 万元","国资委较大~重大档"],
-    ["5","系统性舞弊土壤；潜在损失 ≥5000 万或 ≥年营收 5%","ACFE：年均 5% 营收"]]],
-  ["战略影响（COSO ERM + 央企指引战略风险）", [["1","对战略目标无偏离影响","COSO ERM 2017"],
-    ["2","影响单项年度 KPI，可内部消化","COSO ERM 战略类"],
-    ["3","影响年度重点战略举措推进","央企指引战略风险"],
-    ["4","影响三年规划目标或主营业务布局","COSO：战略与绩效"],
-    ["5","颠覆战略目标/主营业务模式重构","央企指引：战略风险重大"]]],
-  ["数据安全（数安法分级 + ISO 27001 CIA）", [["1","不涉及敏感数据","ISO 27001"],
-    ["2","少量内部非敏数据受损，可恢复","网数条例第 57 条"],
-    ["3","一般个人信息或商业数据泄露（<10 万条）","个保法第 66 条第一款"],
-    ["4","大量个人信息/重要数据泄露或出境违规","个保法顶格；数安法第 45 条"],
-    ["5","重要数据泄露危害国家安全/公共安全","数安法：重大违规"]]],
-  ["健康安全（ISO 45001 + 安全生产法 + 493 号令）", [["1","无人员伤害可能","ISO 45001"],
-    ["2","轻微伤风险，职业健康隐患","ISO 45001"],
-    ["3","重伤风险；一般事故苗头（<3 人死亡）","493 号令一般事故"],
-    ["4","死亡 3~30 人或重伤 10~100 人量级","493 号令较大/重大事故"],
-    ["5","群死群伤（≥30 人死亡）或特别重大事故","493 号令特别重大"]]],
-];
+const SCORING_ANCHORS = window.SCORING_ANCHORS;
 function renderAnchors(){
-  $("tbl-anchor").innerHTML = ANCHORS.map(([title, rows]) =>
-    `<thead><tr><th colspan="3" style="text-align:left">${title}</th></tr>`+
+  $("tbl-anchor").innerHTML = SCORING_ANCHORS.map(group =>
+    `<thead><tr><th colspan="3" style="text-align:left">${group.label}</th></tr>`+
     `<tr><th style="width:36px">分</th><th>锚点</th><th style="width:180px">权威依据</th></tr></thead><tbody>`+
-    rows.map(r=>`<tr><td class="num"><b>${r[0]}</b></td><td>${r[1]}</td><td style="color:var(--muted);font-size:11px">${r[2]}</td></tr>`).join("")+
+    group.rows.map(row=>`<tr><td class="num"><b>${row.score}</b></td><td>${row.anchor}</td><td style="color:var(--muted);font-size:11px">${row.source}</td></tr>`).join("")+
     "</tbody>").join("");
 }
 
@@ -897,7 +922,16 @@ $("sel-ctrl-risk").addEventListener("change",renderCtrlTable);
 });
 $("f-floor").addEventListener("change",e=>setFloor(e.target.value));
 
+const SAFE_PERIOD=/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+const safeText=value=>typeof value==="string"&&value.length<=5000;
+const safeId=value=>typeof value==="string"&&/^[A-Za-z0-9_-]{1,80}$/.test(value);
+function isDesktopRisk(row,period){return row&&typeof row==="object"&&!Array.isArray(row)&&safeId(row.risk_id)&&safeText(row.name)&&safeText(row.domain)&&safeText(row.description)&&safeText(row.owner_dept)&&safeText(row.rationale)&&row.period===period&&Number.isInteger(row.likelihood)&&row.likelihood>=1&&row.likelihood<=5&&DIMS.every(dim=>row[dim]===null||(Number.isInteger(row[dim])&&row[dim]>=1&&row[dim]<=5));}
+function isDesktopControl(row,period){return row&&typeof row==="object"&&!Array.isArray(row)&&safeId(row.control_id)&&safeId(row.risk_id)&&safeText(row.description)&&row.period===period&&Number.isInteger(row.score)&&row.score>=1&&row.score<=5&&(row.key==="是"||row.key==="否");}
+window.RAHMDesktop=window.RAHMDesktop||{};
+window.RAHMDesktop.loadPeriodData=function(period,risks,controls){if(typeof period!=="string"||!SAFE_PERIOD.test(period)||!Array.isArray(risks)||!Array.isArray(controls)||!risks.every(row=>isDesktopRisk(row,period))||!controls.every(row=>isDesktopControl(row,period)))return false;const nextData={...state.data,[period]:{risks:JSON.parse(JSON.stringify(risks)),controls:JSON.parse(JSON.stringify(controls))}};state.data=nextData;state.active=period;persist();renderAll();return true;};
+window.__RAHMDesktopTestState=()=>state;
 boot();
 </script>
+<script src="desktop_report.js"></script>
 </body>
 </html>
