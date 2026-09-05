@@ -120,7 +120,7 @@ Expected: both commands produce no errors and the keyword scan has no matches.
 
 Check each relative README link with `Test-Path`; all four targets must exist.
 
-- [ ] **Step 2: Commit the README and its contract test**
+- [x] **Step 2: Commit the README and its contract test**
 
 Run:
 
@@ -129,7 +129,7 @@ git add -- README.md tests/test_desktop_documentation.py docs/superpowers/plans/
 git commit -m "docs: rewrite README for audit users"
 ```
 
-- [ ] **Step 3: Push the current branch and update PR #4**
+- [x] **Step 3: Push the current branch and update PR #4**
 
 Run:
 
