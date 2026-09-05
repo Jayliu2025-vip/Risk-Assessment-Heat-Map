@@ -30,7 +30,7 @@ required = (
     "报告日期",
     "为同一风险的两条证据",
     "不会复制原始报告",
-    "249 项 Python 测试",
+    "250 项 Python 测试",
     "7 项 Playwright",
 )
 ```
@@ -41,9 +41,9 @@ Also assert that these stale or private phrases are absent:
 forbidden = (
     "点「载入内置示例」",
     "24 项评分模型测试",
-    "公众号",
-    "微信公众号",
-    "WeChat",
+    "\\u516c\\u4f17\\u53f7",
+    "\\u5fae\\u4fe1\\u516c\\u4f17\\u53f7",
+    "\\u0057\\u0065\\u0043\\u0068\\u0061\\u0074",
     ".private/",
 )
 ```
@@ -88,7 +88,7 @@ Use only repository-relative links:
 [第三方许可清单](THIRD_PARTY_NOTICES.md)
 ```
 
-State the verified test status exactly as `249 项 Python 测试` and `7 项 Playwright 流程`. Keep clean-machine/no-Python and physical-disconnect checks marked as outstanding.
+State the verified test status exactly as `250 项 Python 测试` and `7 项 Playwright 流程`. Keep clean-machine/no-Python and physical-disconnect checks marked as outstanding.
 
 - [x] **Step 2: Run the complete documentation contract**
 
@@ -113,7 +113,7 @@ Run:
 
 ```powershell
 git diff --check
-git grep -n -i -E "公众号|微信公众号|WeChat|\.private/" -- README.md
+git grep -n -i -E "private publishing|\.private/" -- README.md
 ```
 
 Expected: both commands produce no errors and the keyword scan has no matches.
@@ -134,7 +134,7 @@ git commit -m "docs: rewrite README for audit users"
 Run:
 
 ```powershell
-git push origin codex/remove-private-wechat-content
+git push origin codex/user-first-readme
 gh pr edit 4 --title "docs: publish user-first README and remove private drafts"
 gh pr view 4 --json number,state,title,url,headRefOid,mergeable
 ```

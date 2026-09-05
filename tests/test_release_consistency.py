@@ -64,7 +64,7 @@ class ReleaseConsistencyTests(unittest.TestCase):
         )
         self.assertEqual(sample_data["config"]["version"], expected_version)
 
-        self.assertIn("> 当前版本：1.2", read_text("README.md"))
+        self.assertIn("当前版本：`1.2`", read_text("README.md"))
         manual = read_text("docs/使用手册.md")
         self.assertIn("> 版本 1.2", manual)
         self.assertIn('"version": "1.2"', manual)
@@ -113,8 +113,18 @@ class ReleaseConsistencyTests(unittest.TestCase):
         manual = read_text("docs/使用手册.md")
         sample_source = read_text("tools/sample_data.py")
 
-        self.assertIn("战略影响/数据安全/健康安全", readme)
-        self.assertIn("每期 24 条", readme)
+        for dimension in (
+            "经济损失",
+            "合规法律",
+            "运营中断",
+            "声誉舆情",
+            "舞弊风险",
+            "战略影响",
+            "数据安全",
+            "健康安全",
+        ):
+            with self.subTest(dimension=dimension):
+                self.assertIn(dimension, readme)
         self.assertIn("4 大类 12 领域", readme)
         self.assertIn("每期 24 条", sample_source)
         self.assertIn("4 大类 12 领域", sample_source)
@@ -132,7 +142,8 @@ class ReleaseConsistencyTests(unittest.TestCase):
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, manual)
-        self.assertIn("24 项评分模型测试 + 发布一致性测试", readme)
+        self.assertIn("250 项 Python 测试", readme)
+        self.assertIn("7 项 Playwright 流程", readme)
         self.assertIn("Σ(wᵢ×维度ᵢ)/Σ(已评分维度的wᵢ)", readme)
         self.assertIn("八个权重输入框", manual)
         self.assertIn("参数配置页 B11 合计格", manual)

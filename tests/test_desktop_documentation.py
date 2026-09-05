@@ -19,15 +19,15 @@ class DesktopDocumentationTests(unittest.TestCase):
             "报告日期",
             "为同一风险的两条证据",
             "不会复制原始报告",
-            "249 项 Python 测试",
+            "250 项 Python 测试",
             "7 项 Playwright",
         )
         forbidden = (
             "点「载入内置示例」",
             "24 项评分模型测试",
-            "公众号",
-            "微信公众号",
-            "WeChat",
+            "\u516c\u4f17\u53f7",
+            "\u5fae\u4fe1\u516c\u4f17\u53f7",
+            "\u0057\u0065\u0043\u0068\u0061\u0074",
             ".private/",
         )
 
